@@ -7,22 +7,34 @@ This Python script is designed to automate the collection of business contact in
 1.  **Google Places API:** Fetches business listings, including names, addresses, phone numbers, and websites.
 2.  **Panorama Firm (panoramafirm.pl):** A Polish business directory.
 3.  **PKT.pl:** Another Polish business directory.
+4.  **Booksy / Moment.pl:** Free listings from Booksy (Moment redirects to Booksy).
+5.  **Fresha:** Listing data with category filters and pagination.
+6.  **SPAeden:** Spa/wellness ranking list (for spa/wellness/massage).
+7.  **ZnanyLekarz:** Profiles for massage/fizjoterapia (best‑effort).
+8.  **Fixly:** Best‑effort (often JS‑rendered).
+9.  **Cylex:** Polish business directory (may be protected).
+10. **Oferteo:** Business profiles with JSON‑LD.
+11. **Firmy.net:** Business directory (limited contact data).
+12. **BiznesFinder:** Business profiles with JSON‑LD.
 
-The script can optionally extract email addresses from the websites of the businesses found. All collected and deduplicated data is then saved into an Excel (`.xlsx`) file for easy access and use.
+The script can optionally extract email addresses from the websites of the businesses found. All collected and deduplicated data can be saved to Excel (`.xlsx`), CSV, or JSON for easy access and use.
 
 This tool is intended to help streamline lead generation and market research by consolidating information from various platforms into a single structured output.
 
 ## Features
 
-*   **Multi-Source Scraping:** Gathers data from Google Places API, Panorama Firm, and PKT.pl.
+*   **Multi-Source Scraping:** Gathers data from Google Places API, Panorama Firm, PKT.pl, Booksy, Fresha, SPAeden, ZnanyLekarz, Fixly, Cylex, Oferteo, Firmy.net, and BiznesFinder.
 *   **Targeted Search:** Allows users to specify the industry/query and location for the search.
 *   **Email Extraction:** Optionally crawls business websites to find and extract email addresses using regex and by checking common contact pages.
-*   **Data Deduplication:** Merges results from all sources and attempts to remove duplicate entries based on business name and address.
-*   **Excel Output:** Saves the final, consolidated data into a well-formatted `.xlsx` file, with separate columns for emails.
+*   **Data Deduplication:** Merges results from all sources and removes duplicates using normalized name/address/phone.
+*   **Multiple Output Formats:** Saves results to `.xlsx`, `.csv`, or `.json`.
+*   **Caching:** Optional SQLite cache for email extraction to speed up repeated runs.
 *   **API Key Management:** Uses a `.env` file to securely manage the Google Maps API key.
 *   **Politeness Features:** Implements random User-Agent rotation and delays between requests to minimize server load and avoid blocking.
-*   **User-Friendly CLI:** Interactive command-line interface for inputs and confirmations.
-*   **Error Handling:** Includes basic error handling for network issues and API errors.
+*   **User-Friendly CLI:** Interactive prompts or full CLI flags.
+*   **Robots.txt Option:** Optional respect for `robots.txt` while scraping websites.
+*   **Error Handling & Retries:** Retries with backoff for transient network failures.
+*   **Headless Fallback (Optional):** Uses a headless browser for JS‑rendered or blocked pages.
 
 ## Technologies Used
 
@@ -32,7 +44,7 @@ This tool is intended to help streamline lead generation and market research by 
     *   `BeautifulSoup4`: For parsing HTML content from websites.
     *   `openpyxl`: For creating and manipulating Excel files.
     *   `python-dotenv`: For loading environment variables from a `.env` file.
-    *   Standard Python libraries: `os`, `time`, `re`, `json`, `random`, `urllib.parse`.
+    *   Standard Python libraries: `argparse`, `csv`, `json`, `logging`, `sqlite3`, `os`, `time`, `re`, `random`, `urllib.parse`, `urllib.robotparser`.
 
 ## Setup and Installation
 
@@ -65,6 +77,8 @@ This tool is intended to help streamline lead generation and market research by 
     python-dotenv
     ```
 
+    **Headless note:** If you use `--use-headless`, ensure Google Chrome (or a Chromium‑based browser) is installed. The script uses `undetected-chromedriver` to manage the driver automatically.
+
 4.  **Set up Google Maps API Key:**
     *   You will need a Google Cloud Platform project with the **Places API** enabled.
     *   Create a `.env` file in the root directory of the project.
@@ -88,7 +102,7 @@ This tool is intended to help streamline lead generation and market research by 
 
 1.  Navigate to the project directory in your terminal.
 2.  Ensure your virtual environment is activated (if you created one).
-3.  Run the script:
+3.  Run the script (interactive mode):
     ```bash
     python scraper.py
     ```
@@ -99,7 +113,30 @@ This tool is intended to help streamline lead generation and market research by 
     *   **Use Google Places API? (y/n):** Whether to include Google Places in the search (requires API key).
 5.  If an output file (e.g., `results.xlsx`) already exists, you will be prompted to confirm if you want to overwrite it or provide a new filename.
 6.  The script will print progress updates to the console.
-7.  Once completed, the results will be saved in an Excel file (default: `results.xlsx`) in the project directory.
+7.  Once completed, the results will be saved in the chosen format (default: `results.xlsx`) in the project directory.
+
+### CLI Flags (Optional)
+
+You can also run the script non-interactively with CLI flags:
+
+```bash
+python scraper.py --query "hairdresser" --location "Krakow" --emails --use-google --format xlsx --output results.xlsx
+```
+
+Available flags:
+
+*   `--query` — Industry or search query
+*   `--location` — City or location
+*   `--emails` — Extract emails from websites
+*   `--use-google` — Use Google Places API
+*   `--format` — Output format: `xlsx`, `csv`, or `json`
+*   `--output` — Output filename
+*   `--max-pages` — Max pages per source (default: 3)
+*   `--respect-robots` — Respect `robots.txt` for website scraping
+*   `--cache-db` — SQLite cache filename for email extraction (default: `cache.sqlite`)
+*   `--use-headless` — Use headless Chrome for JS/blocked pages (default: on)
+*   `--no-headless` — Disable headless browser
+*   `--headless-wait` — Seconds to wait after render in headless mode (default: 3)
 
 ## Ethical Considerations & Disclaimer
 
@@ -111,10 +148,7 @@ This tool is intended to help streamline lead generation and market research by 
 
 ## Potential Future Improvements
 
-*   Implement `robots.txt` parsing and adherence.
 *   More sophisticated email obfuscation decoding.
-*   Option to specify different output formats (e.g., CSV, JSON).
-*   More advanced error handling and retry mechanisms.
 *   Integration with proxy services for more robust scraping.
 *   GUI interface for easier use.
 *   Asynchronous requests for improved performance.
