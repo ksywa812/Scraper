@@ -40,6 +40,35 @@ LOG_FORMAT = "%(asctime)s | %(levelname)s | %(message)s"
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
 logger = logging.getLogger(__name__)
 
+
+def is_probably_path(value):
+    if not value:
+        return False
+    lowered = value.strip().lower()
+    if ":\\" in lowered or ":/" in lowered:
+        return True
+    if "/" in lowered or "\\" in lowered:
+        return True
+    if lowered.endswith((".txt", ".log", ".csv", ".xlsx", ".json")):
+        return True
+    return False
+
+
+def setup_run_logging(output_path, logs_dir="logs"):
+    os.makedirs(logs_dir, exist_ok=True)
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    base_name = os.path.splitext(os.path.basename(output_path))[0] or "results"
+    log_filename = f"{base_name}_{timestamp}.log"
+    log_path = os.path.join(logs_dir, log_filename)
+
+    file_handler = logging.FileHandler(log_path, encoding="utf-8")
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
+    logger.addHandler(file_handler)
+
+    logger.info("Log file: %s", log_path)
+    return log_path
+
 # List of User-Agents for rotation to avoid blocking
 USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
@@ -53,7 +82,25 @@ def get_random_user_agent():
     return random.choice(USER_AGENTS)
 
 
+# Polish characters that unicodedata.normalize('NFKD') does NOT decompose
+POLISH_CHAR_MAP = {
+    'ł': 'l', 'Ł': 'L',
+    'ą': 'a', 'Ą': 'A',
+    'ć': 'c', 'Ć': 'C',
+    'ę': 'e', 'Ę': 'E',
+    'ń': 'n', 'Ń': 'N',
+    'ó': 'o', 'Ó': 'O',
+    'ś': 's', 'Ś': 'S',
+    'ź': 'z', 'Ź': 'Z',
+    'ż': 'z', 'Ż': 'Z',
+}
+
+
 def strip_accents(text):
+    # First, manually replace Polish chars that NFKD misses (especially ł)
+    for pl_char, ascii_char in POLISH_CHAR_MAP.items():
+        text = text.replace(pl_char, ascii_char)
+    # Then handle remaining diacritics via standard Unicode decomposition
     return ''.join(c for c in unicodedata.normalize('NFKD', text) if not unicodedata.combining(c))
 
 
@@ -65,21 +112,96 @@ def slugify(text):
     return text
 
 
+def is_catalog_url(url):
+    if not url:
+        return False
+    lower = url.lower()
+    return any(d in lower for d in [
+        "booksy.com",
+        "firmy.net",
+        "oferteo.pl",
+        "cylex-polska.pl",
+        "fresha.com",
+        "fixly.pl",
+        "panoramafirm.pl",
+        "pkt.pl",
+        "biznesfinder.pl",
+        "znanylekarz.pl",
+        "moment.pl",
+        "itunes.apple.com",
+        "apps.apple.com",
+        "play.google.com",
+        "apple.com/app",
+    ])
+
+
+def extract_external_website_from_profile(profile_url, session=None, skip_domains=None):
+    if not profile_url:
+        return ""
+    session = session or create_session()
+    skip_domains = skip_domains or []
+
+    def is_valid_external(url):
+        if not url or not url.startswith('http'):
+            return False
+        lower = url.lower()
+        return not any(sd in lower for sd in skip_domains)
+
+    try:
+        resp = session.get(profile_url, headers={'User-Agent': get_random_user_agent()}, timeout=15)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, 'html.parser')
+
+        # First try: obvious website links
+        for a in soup.find_all('a', href=True):
+            text = " ".join(a.stripped_strings).lower()
+            href = a.get('href')
+            if any(k in text for k in ['www', 'strona', 'website', 'witryna', 'odwiedz', 'odwiedź']):
+                if is_valid_external(href):
+                    return href
+
+        # JSON-LD
+        for script in soup.find_all('script', type='application/ld+json'):
+            try:
+                data = json.loads(script.get_text(strip=True))
+                items = data if isinstance(data, list) else [data]
+                for item in items:
+                    if isinstance(item, dict):
+                        url = item.get('url') or item.get('sameAs')
+                        if isinstance(url, list):
+                            for u in url:
+                                if is_valid_external(u):
+                                    return u
+                        elif is_valid_external(url):
+                            return url
+            except Exception:
+                continue
+
+        # Fallback: first external link
+        for a in soup.find_all('a', href=True):
+            href = a.get('href')
+            if is_valid_external(href):
+                return href
+    except Exception:
+        return ""
+    return ""
+
+
 CATEGORY_KEYWORDS = {
-    "masaz": [
+    "spa": [
+        "spa", "day spa", "spa & wellness", "rytual spa", "rytuał spa", "salon spa",
         "masaz", "masaź", "masaż", "massage", "masazysta", "masażysta",
         "masaz relaksacyjny", "masaz klasyczny", "masaz leczniczy",
         "masaz sportowy", "masaz balijski", "masaz tajski", "masaz kobido",
         "masaz lomi", "masaz tkanek", "masaz goracymi kamieniami",
-        "masaz aroma", "aromaterapia", "bodywork"
+        "masaz aroma", "aromaterapia", "bodywork", "kobido"
     ],
-    "spa": ["spa", "day spa", "spa & wellness", "rytual spa", "rytuał spa", "salon spa"],
     "wellness": ["wellness", "odnowa biologiczna", "relaks", "relaksacja"],
     "joga": ["joga", "yoga", "hatha", "vinyasa", "ashtanga", "yin", "kundalini", "joga nidra"],
     "fizjoterapia": ["fizjoterapia", "rehabilitacja", "fizjo", "terapia manualna", "kinezyterapia"],
 }
 
-CATEGORY_PRIORITY = ["masaz", "spa", "wellness", "joga", "fizjoterapia"]
+CATEGORY_PRIORITY = ["spa", "wellness", "joga", "fizjoterapia"]
 
 
 def map_query_to_category(query):
@@ -137,28 +259,12 @@ def fixly_path_for_query(query):
 
 
 def oferteo_paths_for_query(query, location):
-    category = map_query_to_category(query)
     city_slug = slugify(location)
     if not city_slug:
         return []
 
-    candidates = []
-    if category == "masaz":
-        candidates.append(f"{OFERTEO_BASE}/masazysci/{city_slug}")
-        candidates.append(f"{OFERTEO_BASE}/masaz/{city_slug}")
-    elif category == "fizjoterapia":
-        candidates.append(f"{OFERTEO_BASE}/fizjoterapeuci/{city_slug}")
-        candidates.append(f"{OFERTEO_BASE}/fizjoterapia/{city_slug}")
-    elif category == "joga":
-        candidates.append(f"{OFERTEO_BASE}/szkoly-jogi/{city_slug}")
-        candidates.append(f"{OFERTEO_BASE}/joga/{city_slug}")
-    elif category in ("spa", "wellness"):
-        candidates.append(f"{OFERTEO_BASE}/salony-spa/{city_slug}")
-        candidates.append(f"{OFERTEO_BASE}/spa/{city_slug}")
-
-    # Generic search fallback
-    candidates.append(f"{OFERTEO_BASE}/firmy/{city_slug}?q={quote_plus(query)}")
-    return candidates
+    # Use only the generic search listing to avoid frequent 404s on category paths
+    return [f"{OFERTEO_BASE}/firmy/{city_slug}?q={quote_plus(query)}"]
 
 
 def cylex_search_urls(query, location):
@@ -219,6 +325,25 @@ def create_session():
     return session
 
 
+def _detect_chrome_major_version():
+    """Detect installed Chrome major version number."""
+    import subprocess
+    try:
+        # Windows: query registry for Chrome version
+        result = subprocess.run(
+            ['reg', 'query', r'HKEY_CURRENT_USER\Software\Google\Chrome\BLBeacon', '/v', 'version'],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            for line in result.stdout.splitlines():
+                if 'version' in line.lower():
+                    ver = line.strip().split()[-1]
+                    return int(ver.split('.')[0])
+    except Exception:
+        pass
+    return None
+
+
 def get_rendered_html(url, wait_seconds=3, timeout=25):
     try:
         import undetected_chromedriver as uc
@@ -233,9 +358,14 @@ def get_rendered_html(url, wait_seconds=3, timeout=25):
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--window-size=1280,720")
 
+    # Detect installed Chrome version and force matching driver
+    chrome_ver = _detect_chrome_major_version()
+    if chrome_ver:
+        logger.debug("Detected Chrome major version: %s", chrome_ver)
+
     driver = None
     try:
-        driver = uc.Chrome(options=options)
+        driver = uc.Chrome(options=options, version_main=chrome_ver)
         driver.set_page_load_timeout(timeout)
         driver.get(url)
         time.sleep(wait_seconds)
@@ -249,6 +379,26 @@ def get_rendered_html(url, wait_seconds=3, timeout=25):
                 driver.quit()
         except Exception:
             pass
+
+
+def render_with_playwright(url, timeout_ms=25000):
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception as e:
+        logger.warning("Playwright unavailable: %s", e)
+        return None
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(url, wait_until="networkidle", timeout=timeout_ms)
+            html = page.content()
+            browser.close()
+            return html
+    except Exception as e:
+        logger.warning("Playwright render failed for %s: %s", url, e)
+        return None
 
 
 def fetch_html(url, session=None, use_headless=False, headless_wait=3, timeout=20):
@@ -275,7 +425,14 @@ def get_booksy_category_slug(query, session=None):
     query_lower = (query or "").lower()
     mapped = map_query_to_category(query_lower)
     if mapped:
-        return mapped
+        # Booksy has its own category slugs (e.g., spa/massage -> "masaz")
+        booksy_category_map = {
+            "spa": "masaz",
+            "wellness": "masaz",
+            "fizjoterapia": "fizjoterapia",
+            "joga": "joga",
+        }
+        return booksy_category_map.get(mapped, mapped)
 
     # Fallback: try slugified query
     slug = slugify(query_lower)
@@ -293,13 +450,48 @@ def get_booksy_category_slug(query, session=None):
     return None
 
 
+BOOKSY_CITY_SLUG_OVERRIDES = {
+    "wrocław": "wroclaw",
+    "kraków": "krakow",
+    "warszawa": "warszawa",
+    "łódź": "lodz",
+    "gdańsk": "gdansk",
+    "poznań": "poznan",
+    "szczecin": "szczecin",
+    "lublin": "lublin",
+    "katowice": "katowice",
+    "gorzów wielkopolski": "gorzow-wielkopolski",
+    "zielona góra": "zielona-gora",
+    "rzeszów": "rzeszow",
+    "płock": "plock",
+}
+
+
 def get_booksy_city_slug(category_slug, location, session=None):
     session = session or create_session()
     location_lower = (location or "").strip().lower()
-    location_slug = slugify(location_lower)
-    if not location_slug:
+    if not location_lower:
         return None
 
+    candidates = []
+    override = BOOKSY_CITY_SLUG_OVERRIDES.get(location_lower)
+    if override:
+        candidates.append(override)
+    slug = slugify(location_lower)
+    if slug:
+        candidates.append(slug)
+
+    # Try direct city slug by probing the city page
+    for candidate in list(dict.fromkeys([c for c in candidates if c])):
+        try:
+            city_url = f"{BOOKSY_BASE}/s/{category_slug}/{candidate}"
+            resp = session.get(city_url, headers={'User-Agent': get_random_user_agent()}, timeout=15)
+            if resp.status_code == 200 and f"/s/{category_slug}/" in resp.url:
+                return candidate
+        except Exception:
+            pass
+
+    # Fallback: parse category page for matching city link
     url = f"{BOOKSY_BASE}/s/{category_slug}"
     try:
         resp = session.get(url, headers={'User-Agent': get_random_user_agent()}, timeout=15)
@@ -310,7 +502,7 @@ def get_booksy_city_slug(category_slug, location, session=None):
             if f"/s/{category_slug}/" not in href:
                 continue
             text = " ".join(a.stripped_strings).lower()
-            if location_lower in text or f"_{location_slug}" in href:
+            if location_lower in text or (slug and f"_{slug}" in href):
                 part = href.split(f"/s/{category_slug}/", 1)[1]
                 return part.strip("/")
     except Exception as e:
@@ -332,6 +524,94 @@ def clean_booksy_name(text):
     return text
 
 
+def extract_booksy_profile_data(profile_url, session=None):
+    """Extract website, email, and phone from a Booksy profile via __NUXT__ data."""
+    result = {'website': '', 'emails': [], 'phone': ''}
+    if not profile_url:
+        return result
+    session = session or create_session()
+    try:
+        resp = session.get(profile_url, headers={'User-Agent': get_random_user_agent()}, timeout=15)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, 'html.parser')
+
+        skip_domains = [
+            'booksy.com', 'facebook.com', 'instagram.com', 'youtube.com',
+            'tiktok.com', 'linkedin.com', 'google.', 'maps.google.',
+            'itunes.apple.com', 'apps.apple.com', 'play.google.com',
+            'apple.com/app', 'microsoft.com', 'apps.microsoft.com',
+            'appsflyer.com', 'doubleclick.net', 'cloudfront.net',
+            'googleapis.com', 'googletagmanager.com', 'feroot.com',
+            'onelink.me', 'apple-mapkit.com', 'app.link',
+        ]
+
+        def is_valid_external(url):
+            if not url or not url.startswith('http'):
+                return False
+            lower = url.lower()
+            return not any(sd in lower for sd in skip_domains)
+
+        # PRIMARY: Parse window.__NUXT__ — Booksy embeds all business data here
+        for script in soup.find_all('script'):
+            text = script.get_text(' ', strip=True)
+            if 'window.__NUXT__' not in text:
+                continue
+            decoded = text.replace('\\u002F', '/')
+
+            # Extract website
+            website_match = re.search(r'website:"(https?://[^"]+)"', decoded)
+            if website_match:
+                w = website_match.group(1)
+                if is_valid_external(w):
+                    result['website'] = w
+
+            # Extract phone
+            phone_match = re.search(r'phone:"([^"]+)"', decoded)
+            if phone_match:
+                result['phone'] = phone_match.group(1)
+
+            # Extract emails (skip booksy.com emails)
+            all_emails = re.findall(r'[\w.+-]+@[\w-]+\.[\w.]+', decoded)
+            result['emails'] = list(dict.fromkeys(
+                e for e in all_emails if 'booksy.com' not in e.lower()
+            ))
+            break  # Only process first __NUXT__ script
+
+        # FALLBACK: Try explicit website links in HTML if __NUXT__ didn't yield website
+        if not result['website']:
+            for a in soup.find_all('a', href=True):
+                text = " ".join(a.stripped_strings).lower()
+                href = a.get('href')
+                if any(k in text for k in ['www', 'strona', 'website', 'witryna', 'odwiedz', 'odwiedź']):
+                    if is_valid_external(href):
+                        result['website'] = href
+                        break
+
+        # FALLBACK: JSON-LD
+        if not result['website']:
+            for script in soup.find_all('script', type='application/ld+json'):
+                try:
+                    data = json.loads(script.get_text(strip=True))
+                    items = data if isinstance(data, list) else [data]
+                    for item in items:
+                        if isinstance(item, dict):
+                            url = item.get('url') or item.get('sameAs')
+                            if isinstance(url, list):
+                                for u in url:
+                                    if is_valid_external(u):
+                                        result['website'] = u
+                                        break
+                            elif is_valid_external(url):
+                                result['website'] = url
+                            if result['website']:
+                                break
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return result
+
+
 def parse_booksy_listings(html, category_slug):
     soup = BeautifulSoup(html, 'html.parser')
     entries = {}
@@ -343,12 +623,17 @@ def parse_booksy_listings(html, category_slug):
         if not href_pattern.match(href):
             continue
 
-        full_url = href if href.startswith("http") else f"{BOOKSY_BASE}{href}"
+        if href.startswith("http"):
+            full_url = href
+        elif href.startswith("/pl-pl/"):
+            full_url = f"https://booksy.com{href}"
+        else:
+            full_url = f"{BOOKSY_BASE}{href}"
         text = " ".join(a.stripped_strings)
         if not text:
             continue
 
-        entry = entries.setdefault(full_url, {"name": "", "address": ""})
+        entry = entries.setdefault(full_url, {"name": "", "address": "", "profile_url": full_url})
 
         if "•" in text:
             left, right = text.split("•", 1)
@@ -372,6 +657,7 @@ def parse_booksy_listings(html, category_slug):
             'formatted_address': data["address"],
             'formatted_phone_number': "",
             'website': url,
+            'profile_url': data.get("profile_url", url),
             'emails': []
         })
 
@@ -412,6 +698,31 @@ def scrape_booksy(query, location, max_pages=3, session=None):
         except Exception as e:
             logger.warning("Booksy: error fetching %s: %s", page_url, e)
             break
+
+    # Deep scrape Booksy profiles to get real external website URLs, emails, and phones
+    if results:
+        logger.info("Booksy: deep scraping %s profiles for external websites & emails", len(results))
+    for idx, item in enumerate(results, start=1):
+        profile_url = item.get('profile_url') or item.get('website')
+        if not profile_url:
+            continue
+        logger.info("Booksy: profile %s/%s  %s", idx, len(results), item.get('name', ''))
+        profile_data = extract_booksy_profile_data(profile_url, session=session)
+        # Website
+        if profile_data['website'] and not is_catalog_url(profile_data['website']):
+            logger.info("Booksy:   → website: %s", profile_data['website'])
+            item['website'] = profile_data['website']
+        else:
+            item['website'] = ""
+        # Emails
+        if profile_data['emails']:
+            logger.info("Booksy:   → emails: %s", ', '.join(profile_data['emails']))
+            existing = item.get('emails') or []
+            item['emails'] = list(dict.fromkeys(existing + profile_data['emails']))
+        # Phone
+        if profile_data['phone'] and not item.get('formatted_phone_number'):
+            item['formatted_phone_number'] = profile_data['phone']
+        time.sleep(random.uniform(0.5, 1.0))
 
     return results
 
@@ -484,66 +795,88 @@ def extract_fresha_name_address(container):
     return name, address
 
 
-def scrape_fresha(query, location, session=None, max_pages=3):
+def scrape_fresha(query, location, session=None, max_pages=3, use_headless=False, headless_wait=3):
     results = []
     session = session or create_session()
 
     category = map_query_to_category(query) or "spa"
     keyword_filter = fresha_category_keywords(category)
     business_type = fresha_business_type_for_query(query)
-    location_slug = f"pl-{slugify(location)}"
-    base_url = f"{FRESHA_BASE}/lp/en/bt/{business_type}/in/{location_slug}"
+    location_slug = slugify(location)
+    base_urls = []
+    if location_slug:
+        base_urls.append(f"{FRESHA_BASE}/lp/en/bt/{business_type}/in/pl-{location_slug}")
+        base_urls.append(f"{FRESHA_BASE}/lp/en/bt/{business_type}/in/{location_slug}")
+    base_urls.append(f"{FRESHA_BASE}/lp/en/bt/{business_type}")
+    if location:
+        base_urls.append(f"{FRESHA_BASE}/search?q={quote_plus(location)}")
+        base_urls.append(f"{FRESHA_BASE}/search?q={quote_plus(f'{query} {location}'.strip())}")
+
+    def parse_fresha_html(html, seen_keys):
+        soup = BeautifulSoup(html, 'html.parser')
+        page_added = 0
+        for a in soup.find_all('a', href=True):
+            href = a['href']
+            if "/lvp/" not in href:
+                continue
+            full_url = href if href.startswith("http") else f"{FRESHA_BASE}{href}"
+            container = a.find_parent()
+            if not container:
+                continue
+            container_text = container.get_text(" ").lower()
+            if keyword_filter and not any(k in container_text for k in keyword_filter):
+                continue
+            name, address = extract_fresha_name_address(container)
+            if not name:
+                continue
+            key = f"{normalize_name(name)}|{normalize_address(address)}"
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            page_added += 1
+            results.append({
+                'name': name,
+                'formatted_address': address,
+                'formatted_phone_number': "",
+                'website': full_url,
+                'emails': []
+            })
+        return page_added
 
     seen = set()
-    for page in range(1, max_pages + 1):
-        url = base_url if page == 1 else f"{base_url}?page={page}"
-        try:
-            resp = session.get(url, headers={'User-Agent': get_random_user_agent()}, timeout=20)
-            resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, 'html.parser')
-
-            page_added = 0
-            for a in soup.find_all('a', href=True):
-                href = a['href']
-                if "/lvp/" not in href:
-                    continue
-                full_url = href if href.startswith("http") else f"{FRESHA_BASE}{href}"
-                container = a.find_parent()
-                if not container:
-                    continue
-                container_text = container.get_text(" ").lower()
-                if keyword_filter and not any(k in container_text for k in keyword_filter):
-                    continue
-                name, address = extract_fresha_name_address(container)
-                if not name:
-                    continue
-                key = f"{normalize_name(name)}|{normalize_address(address)}"
-                if key in seen:
-                    continue
-                seen.add(key)
-                page_added += 1
-                results.append({
-                    'name': name,
-                    'formatted_address': address,
-                    'formatted_phone_number': "",
-                    'website': full_url,
-                    'emails': []
-                })
-
-            logger.info("Fresha: extracted %s listings from %s", page_added, url)
-            if page_added == 0:
+    for base_url in base_urls:
+        total_added_for_base = 0
+        for page in range(1, max_pages + 1):
+            url = base_url if page == 1 else f"{base_url}?page={page}"
+            try:
+                resp = session.get(url, headers={'User-Agent': get_random_user_agent()}, timeout=20)
+                if resp.status_code == 404:
+                    logger.warning("Fresha: 404 for %s", url)
+                    break
+                resp.raise_for_status()
+                page_added = parse_fresha_html(resp.text, seen)
+                if page_added == 0 and use_headless:
+                    rendered = get_rendered_html(url, wait_seconds=headless_wait, timeout=25)
+                    if rendered:
+                        page_added = parse_fresha_html(rendered, seen)
+                logger.info("Fresha: extracted %s listings from %s", page_added, url)
+                total_added_for_base += page_added
+                if page_added == 0:
+                    break
+                time.sleep(random.uniform(1.0, 2.0))
+            except Exception as e:
+                logger.warning("Fresha: error fetching %s: %s", url, e)
                 break
-            time.sleep(random.uniform(1.0, 2.0))
-        except Exception as e:
-            logger.warning("Fresha: error fetching %s: %s", url, e)
+
+        if total_added_for_base > 0:
             break
 
     return results
 
 
 def scrape_moment(query, location, session=None, max_pages=3):
-    logger.info("Moment.pl redirects to Booksy; reusing Booksy results.")
-    return scrape_booksy(query, location, max_pages=max_pages, session=session)
+    logger.info("Moment.pl redirects to Booksy; skipping (results already collected via Booksy).")
+    return []  # Booksy results are already collected, no need to deep scrape again
 
 
 def extract_cylex_profile(profile_url, session=None, use_headless=False, headless_wait=3):
@@ -591,6 +924,7 @@ def extract_cylex_profile(profile_url, session=None, use_headless=False, headles
             'formatted_address': address,
             'formatted_phone_number': phone,
             'website': website or profile_url,
+            'profile_url': profile_url,
             'emails': []
         }
     except Exception as e:
@@ -613,7 +947,7 @@ def scrape_cylex(query, location, session=None, max_pages=3, use_headless=False,
                 continue
             if "cloudflare" in html.lower() or "attention required" in html.lower():
                 logger.warning("Cylex: Cloudflare block detected for %s", url)
-                continue
+                break
             soup = BeautifulSoup(html, 'lxml')
 
             profile_links = []
@@ -706,6 +1040,7 @@ def extract_oferteo_profile(profile_url, session=None):
             'formatted_address': address,
             'formatted_phone_number': phone,
             'website': website or profile_url,
+            'profile_url': profile_url,
             'emails': []
         }
     except Exception as e:
@@ -958,24 +1293,124 @@ def extract_firmynet_profile(profile_url, session=None, use_headless=False, head
         if phone_link:
             phone = phone_link.get('href', '').replace('tel:', '').strip()
 
+        emails = []
+        for mail in soup.find_all('a', href=re.compile(r'^mailto:', re.I)):
+            addr = mail.get('href', '').replace('mailto:', '').strip()
+            if addr and '@' in addr:
+                emails.append(addr)
+
         website = ""
-        for a in soup.find_all('a', href=True):
-            href = a['href']
-            if href.startswith('http') and FIRMYNET_BASE not in href and 'st-firmy.net' not in href:
+        # Domains to skip (ads, trackers, social media, internal links)
+        skip_domains = [
+            'firmy.net', 'st-firmy.net', 'google.', 'facebook.com',
+            'instagram.com', 'twitter.com', 'youtube.com', 'linkedin.com',
+            'tiktok.com', 'pinterest.com', 'bing.com', 'yahoo.com',
+            'doubleclick.net', 'googlesyndication.com', 'googletagmanager.com',
+            'googleadservices.com', 'gstatic.com', 'googleapis.com',
+            'cloudflare.com', 'cdn.', 'wp.pl', 'onet.pl',
+        ]
+
+        def is_valid_external(url):
+            if not url or not url.startswith('http'):
+                return False
+            lower = url.lower()
+            return not any(sd in lower for sd in skip_domains)
+
+        # First try: look for a link with text like "strona www", "witryna", "odwiedź"
+        www_link = soup.find('a', href=True, string=re.compile(
+            r'(strona|www|witryna|odwied|website|homepage)', re.I
+        ))
+        if www_link:
+            href = www_link.get('href')
+            if is_valid_external(href):
                 website = href
-                break
+
+        # Second try: data-href/data-url (often used in buttons)
+        if not website:
+            for tag in soup.find_all(attrs={"data-href": True}):
+                href = tag.get("data-href")
+                if is_valid_external(href):
+                    website = href
+                    break
+        if not website:
+            for tag in soup.find_all(attrs={"data-url": True}):
+                href = tag.get("data-url")
+                if is_valid_external(href):
+                    website = href
+                    break
+
+        # Third try: unwrap redirect links containing ?url= or ?u=
+        if not website:
+            for a in soup.find_all('a', href=True):
+                href = a.get('href', '')
+                if 'url=' in href or 'u=' in href:
+                    try:
+                        from urllib.parse import urlparse, parse_qs
+                        parsed = urlparse(href)
+                        params = parse_qs(parsed.query)
+                        for key in ('url', 'u'):
+                            if key in params:
+                                candidate = params[key][0]
+                                if is_valid_external(candidate):
+                                    website = candidate
+                                    break
+                    except Exception:
+                        pass
+                if website:
+                    break
+
+        # Fallback: find first external link that isn't a skip domain
+        if not website:
+            for a in soup.find_all('a', href=True, rel=lambda r: r != 'nofollow' if r else True):
+                href = a['href']
+                if is_valid_external(href):
+                    website = href
+                    break
 
         address = ""
-        meta_desc = soup.find('meta', attrs={'name': 'description'})
-        if meta_desc and meta_desc.get('content'):
-            address = meta_desc['content']
+        # Try structured data first for address
+        for script in soup.find_all('script', type='application/ld+json'):
+            try:
+                data = json.loads(script.get_text(strip=True))
+                items = data if isinstance(data, list) else [data]
+                for item in items:
+                    if isinstance(item, dict) and item.get('@type') == 'LocalBusiness':
+                        addr_obj = item.get('address', {})
+                        if isinstance(addr_obj, dict):
+                            parts = [addr_obj.get('streetAddress', ''),
+                                     addr_obj.get('postalCode', ''),
+                                     addr_obj.get('addressLocality', '')]
+                            address = ', '.join(p for p in parts if p)
+                        if not website:
+                            website = item.get('url', '') or ''
+            except Exception:
+                continue
+
+        # Try to extract website from embedded JS/JSON blobs
+        if not website:
+            for script in soup.find_all('script'):
+                text = script.get_text(" ", strip=True)
+                if not text:
+                    continue
+                for url in re.findall(r"https?://[^\s'\"<>]+", text):
+                    if is_valid_external(url):
+                        website = url
+                        break
+                if website:
+                    break
+        # Fallback to meta description
+        if not address:
+            meta_desc = soup.find('meta', attrs={'name': 'description'})
+            if meta_desc and meta_desc.get('content'):
+                address = meta_desc['content']
 
         return {
             'name': name,
             'formatted_address': address,
             'formatted_phone_number': phone,
-            'website': website or profile_url,
-            'emails': []
+            'website': website,  # Don't fallback to profile_url — it's a catalog URL
+            'profile_url': profile_url,
+            'emails': list(dict.fromkeys([e for e in emails if '@' in e]))
         }
     except Exception as e:
         logger.warning("Firmy.net: profile fetch error %s: %s", profile_url, e)
@@ -996,16 +1431,42 @@ def scrape_firmynet(query, location, session=None, max_pages=3, use_headless=Fal
     soup = BeautifulSoup(html, 'lxml')
 
     profile_links = []
-    for a in soup.find_all('a', href=True):
-        href = a['href']
-        if href.startswith('/'):
-            href = urljoin(FIRMYNET_BASE, href)
-        if not href.startswith(FIRMYNET_BASE):
-            continue
-        if ',' in href and href.endswith('.html'):
-            profile_links.append(href)
+    # Try to scope extraction to actual result containers first
+    result_containers = soup.select(
+        'div.company-item, div.company-list-item, div.result-item, '
+        'li.company, div.business-card, article.company, '
+        'div[class*="company"], div[class*="result"], div[class*="listing"]'
+    )
+    if result_containers:
+        for container in result_containers:
+            first_link = container.find('a', href=True)
+            if not first_link:
+                continue
+            href = first_link['href']
+            if href.startswith('/'):
+                href = urljoin(FIRMYNET_BASE, href)
+            if not href.startswith(FIRMYNET_BASE):
+                continue
+            if ',' in href and href.endswith('.html'):
+                profile_links.append(href)
+    else:
+        # Fallback: search all <a> but only within the main content area
+        main_content = soup.find('main') or soup.find('div', id='content') or soup.find('div', class_='content') or soup
+        for a in main_content.find_all('a', href=True):
+            href = a['href']
+            if href.startswith('/'):
+                href = urljoin(FIRMYNET_BASE, href)
+            if not href.startswith(FIRMYNET_BASE):
+                continue
+            # Skip sidebar/footer links: only accept links that look like direct profiles
+            if ',' in href and href.endswith('.html'):
+                # Exclude common non-profile patterns
+                if any(x in href.lower() for x in ['/kategorie/', '/miasta/', '/regulamin', '/polityka', '/mapa-strony']):
+                    continue
+                profile_links.append(href)
 
     profile_links = list(dict.fromkeys(profile_links))
+    logger.info("Firmy.net: found %s profile links on search page", len(profile_links))
     for profile_url in profile_links:
         if profile_url in seen_profiles:
             continue
@@ -1070,6 +1531,7 @@ def extract_biznesfinder_profile(profile_url, session=None, use_headless=False, 
             'formatted_address': address,
             'formatted_phone_number': phone,
             'website': website or profile_url,
+            'profile_url': profile_url,
             'emails': list(dict.fromkeys([e for e in emails if '@' in e]))
         }
     except Exception as e:
@@ -1420,7 +1882,26 @@ def can_fetch_url(url, respect_robots=False):
         return True
 
 
-def extract_emails_from_website(url, session=None, cache_conn=None, respect_robots=False):
+def get_sitemap_urls(base_url, session=None, limit=10):
+    session = session or create_session()
+    try:
+        sitemap_url = base_url.rstrip('/') + '/sitemap.xml'
+        resp = session.get(sitemap_url, headers={'User-Agent': get_random_user_agent()}, timeout=15)
+        if resp.status_code != 200:
+            return []
+        soup = BeautifulSoup(resp.text, 'xml')
+        urls = [loc.get_text(strip=True) for loc in soup.find_all('loc')]
+        urls = [u for u in urls if u.startswith(base_url)]
+        # prioritize contact-like pages
+        priority_keywords = ['kontakt', 'contact', 'o-nas', 'about', 'oferta', 'cennik', 'services']
+        prioritized = [u for u in urls if any(k in u.lower() for k in priority_keywords)]
+        others = [u for u in urls if u not in prioritized]
+        return (prioritized + others)[:limit]
+    except Exception:
+        return []
+
+
+def extract_emails_from_website(url, session=None, cache_conn=None, respect_robots=False, use_headless=False, headless_wait=3):
     """Extracts email addresses from a website."""
     if not url:
         return []
@@ -1467,12 +1948,13 @@ def extract_emails_from_website(url, session=None, cache_conn=None, respect_robo
         # Check subpages like "kontakt" or "contact"
         contact_links = []
         base_domain = '{uri.scheme}://{uri.netloc}'.format(uri=urlparse(url))
+        keyword_hints = ['kontakt', 'contact', 'about', 'o-nas', 'oferta', 'cennik', 'price', 'services']
         for link in soup.find_all('a', href=True):
             href = link['href'].strip()
             # Skip mailto:, tel:, javascript: and anchor-only links
             if href.startswith(('mailto:', 'tel:', 'javascript:', '#', 'data:')):
                 continue
-            if any(keyword in href.lower() for keyword in ['kontakt', 'contact', 'about', 'o-nas']):
+            if any(keyword in href.lower() for keyword in keyword_hints):
                 # Add full URL if it's relative
                 if href.startswith('/'):
                     contact_links.append(base_domain + href)
@@ -1484,8 +1966,8 @@ def extract_emails_from_website(url, session=None, cache_conn=None, respect_robo
         # Remove duplicate contact links
         contact_links = list(set(contact_links))
         
-        # Visit found contact pages (limit to 2 to avoid excessive requests)
-        for contact_url in contact_links[:2]:
+        # Visit found contact pages (limit to 5 to avoid excessive requests)
+        for contact_url in contact_links[:5]:
             try:
                 if not can_fetch_url(contact_url, respect_robots=respect_robots):
                     continue
@@ -1495,6 +1977,52 @@ def extract_emails_from_website(url, session=None, cache_conn=None, respect_robo
                 emails.extend(contact_emails)
             except Exception as e:
                 logger.warning("Could not fetch contact page %s: %s", contact_url, e)
+
+        # Sitemap crawl fallback (limit additional pages)
+        if not emails:
+            sitemap_urls = get_sitemap_urls(base_domain, session=session, limit=8)
+            for sitemap_url in sitemap_urls:
+                try:
+                    if not can_fetch_url(sitemap_url, respect_robots=respect_robots):
+                        continue
+                    resp = session.get(sitemap_url, headers={'User-Agent': get_random_user_agent()}, timeout=10, allow_redirects=True)
+                    resp.raise_for_status()
+                    emails.extend(re.findall(email_pattern, resp.text))
+                except Exception:
+                    continue
+
+        # Headless fallback for JS-rendered pages (Playwright first, then Chromium)
+        if not emails and use_headless:
+            rendered = render_with_playwright(url, timeout_ms=20000)
+            if not rendered:
+                rendered = get_rendered_html(url, wait_seconds=headless_wait, timeout=20)
+            if rendered:
+                emails.extend(re.findall(email_pattern, rendered))
+                rendered_soup = BeautifulSoup(rendered, 'html.parser')
+                rendered_links = []
+                base_domain = '{uri.scheme}://{uri.netloc}'.format(uri=urlparse(url))
+                for link in rendered_soup.find_all('a', href=True):
+                    href = link['href'].strip()
+                    if href.startswith(('mailto:', 'tel:', 'javascript:', '#', 'data:')):
+                        continue
+                    if any(keyword in href.lower() for keyword in ['kontakt', 'contact', 'about', 'o-nas']):
+                        if href.startswith('/'):
+                            rendered_links.append(base_domain + href)
+                        elif href.startswith('http'):
+                            rendered_links.append(href)
+                        elif '/' in href or '.' in href:
+                            rendered_links.append(base_domain + '/' + href)
+                rendered_links = list(set(rendered_links))
+                for contact_url in rendered_links[:3]:
+                    try:
+                        if not can_fetch_url(contact_url, respect_robots=respect_robots):
+                            continue
+                        contact_response = session.get(contact_url, headers={'User-Agent': get_random_user_agent()}, timeout=10, allow_redirects=True)
+                        contact_response.raise_for_status()
+                        contact_emails = re.findall(email_pattern, contact_response.text)
+                        emails.extend(contact_emails)
+                    except Exception:
+                        pass
         
         # Check 'data-email' attribute often used for hidden emails
         for element in soup.find_all(attrs={"data-email": True}):
@@ -1552,14 +2080,6 @@ def merge_results(google_results, panorama_results, pkt_results):
 
 def save_to_excel(data, filename=OUTPUT_FILE):
     """Saves data to an Excel file."""
-    # Check if file exists
-    if os.path.exists(filename):
-        confirm = input(f"File {filename} already exists. Overwrite? (y/n): ").lower()
-        if confirm != 'y':
-            new_name = input("Enter a new filename: ")
-            if new_name:
-                filename = new_name if new_name.endswith('.xlsx') else f"{new_name}.xlsx"
-    
     try:
         wb = openpyxl.Workbook()
         ws = wb.active
@@ -1642,12 +2162,6 @@ def save_to_csv(data, filename):
 
 
 def save_to_json(data, filename):
-    if os.path.exists(filename):
-        confirm = input(f"File {filename} already exists. Overwrite? (y/n): ").lower()
-        if confirm != 'y':
-            new_name = input("Enter a new filename: ")
-            if new_name:
-                filename = new_name if new_name.endswith('.json') else f"{new_name}.json"
     try:
         with open(filename, mode='w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -1684,10 +2198,180 @@ def main():
     parser.add_argument("--headless-wait", type=int, default=3, help="Seconds to wait after render in headless mode")
     args = parser.parse_args()
 
-    query = (args.query or input("Enter the industry (e.g., hairdresser): ")).strip()
-    location = (args.location or input("Enter the city (e.g., Krakow): ")).strip()
+    # Variables to store interactive choices, defaults from args
+    selected_query = args.query
+    selected_location = args.location
+    # Always extract emails unless explicitly disabled via future flag
+    selected_emails = True if not args.emails else True
+    
+    # helper for entering filenames
+    def prompt_for_filename(default_name):
+        print(f"\n--- ZAPISYWANIE WYNIKÓW ---")
+        name = input(f"Podaj nazwę pliku do zapisu (domyślnie: {default_name}): ").strip()
+        return name or default_name
 
-    scrape_emails_choice = args.emails or (input("Do you want to extract emails from websites? (y/n): ").lower() == 'y')
+    def ensure_output_path(output_name, output_format, scraped_dir="scraped"):
+        os.makedirs(scraped_dir, exist_ok=True)
+        base_name = os.path.basename(output_name or OUTPUT_FILE)
+        root, _ext = os.path.splitext(base_name)
+        if not root:
+            root = "results"
+        fmt = (output_format or "xlsx").lower()
+        ext = ".xlsx" if fmt == "xlsx" else ".csv" if fmt == "csv" else ".json"
+        return os.path.join(scraped_dir, f"{root}{ext}")
+
+    def resolve_existing_output(path, output_format):
+        if not os.path.exists(path):
+            return path
+        confirm = input(f"Plik {path} już istnieje. Nadpisać? (t/n): ").strip().lower()
+        if confirm == 't':
+            return path
+        new_name = input("Podaj nową nazwę pliku: ").strip()
+        if not new_name:
+            return path
+        return ensure_output_path(new_name, output_format)
+
+    # Interactive Wizard Mode
+    if not any([args.query, args.location]):
+        print("\n" + "="*40)
+        print("   KREATOR KONFIGURACJI SCRAPERA")
+        print("="*40)
+        
+        # 1. Choose Industry
+        print("\nKROK 1/3: Wybierz branżę")
+        known_industries = ["spa", "wellness", "joga", "fizjoterapia"]
+        industry_labels = {
+            "spa": "SPA / Masaż / Kobido",
+            "wellness": "Wellness",
+            "joga": "Joga",
+            "fizjoterapia": "Fizjoterapia",
+        }
+        for i, k in enumerate(known_industries, 1):
+            print(f"{i}. {industry_labels.get(k, k.upper())}")
+        print(f"{len(known_industries)+1}. Inna (wpisz ręcznie)")
+        
+        while not selected_query:
+            choice = input("Twój wybór: ").strip()
+            if choice.isdigit():
+                idx = int(choice)
+                if 1 <= idx <= len(known_industries):
+                    selected_query = known_industries[idx-1]
+                elif idx == len(known_industries) + 1:
+                    raw_input = input("Wpisz nazwę branży: ").strip()
+                    if raw_input and not is_probably_path(raw_input):
+                        selected_query = raw_input
+                    else:
+                        print("[!] Nieprawidłowa nazwa. Nie może być ścieżką do pliku.")
+                else:
+                    print("[!] Nieprawidłowy numer.")
+            else:
+                 print("[!] Wpisz numer z listy.")
+
+        # 2. Choose Location (Voivodeship -> City)
+        print(f"\nKROK 2/3: Wybierz lokalizację")
+        POLAND_LOCATIONS = {
+            "Dolnośląskie": ["Wrocław", "Wałbrzych", "Legnica", "Jelenia Góra", "Lubin", "Głogów", "Świdnica"],
+            "Kujawsko-Pomorskie": ["Bydgoszcz", "Toruń", "Włocławek", "Grudziądz", "Inowrocław"],
+            "Lubelskie": ["Lublin", "Zamość", "Chełm", "Biała Podlaska"],
+            "Lubuskie": ["Zielona Góra", "Gorzów Wielkopolski", "Nowa Sól"],
+            "Łódzkie": ["Łódź", "Piotrków Trybunalski", "Pabianice", "Tomaszów Mazowiecki", "Bełchatów"],
+            "Małopolskie": ["Kraków", "Tarnów", "Nowy Sącz", "Oświęcim", "Chrzanów"],
+            "Mazowieckie": ["Warszawa", "Radom", "Płock", "Siedlce", "Pruszków", "Legionowo"],
+            "Opolskie": ["Opole", "Kędzierzyn-Koźle", "Nysa"],
+            "Podkarpackie": ["Rzeszów", "Przemyśl", "Stalowa Wola", "Mielec"],
+            "Podlaskie": ["Białystok", "Suwałki", "Łomża"],
+            "Pomorskie": ["Gdańsk", "Gdynia", "Sopot", "Słupsk", "Tczew", "Wejherowo"],
+            "Śląskie": ["Katowice", "Bielsko-Biała", "Częstochowa", "Gliwice", "Zabrze", "Bytom", "Rybnik", "Tychy", "Dąbrowa Górnicza", "Chorzów", "Sosnowiec"],
+            "Świętokrzyskie": ["Kielce", "Ostrowiec Świętokrzyski", "Starachowice"],
+            "Warmińsko-Mazurskie": ["Olsztyn", "Elbląg", "Ełk"],
+            "Wielkopolskie": ["Poznań", "Kalisz", "Konin", "Piła", "Ostrów Wielkopolski", "Gniezno"],
+            "Zachodniopomorskie": ["Szczecin", "Koszalin", "Stargard", "Kołobrzeg", "Świnoujście"]
+        }
+        
+        while not selected_location:
+            print("\n--- Województwa ---")
+            voivodeships = sorted(POLAND_LOCATIONS.keys())
+            for i, v in enumerate(voivodeships, 1):
+                print(f"{i}. {v}")
+            print(f"{len(voivodeships)+1}. Inne / Wpisz ręcznie miasto")
+            
+            v_choice = input("Wybierz województwo: ").strip()
+            
+            if v_choice.isdigit():
+                v_idx = int(v_choice)
+                if 1 <= v_idx <= len(voivodeships):
+                    selected_v = voivodeships[v_idx-1]
+                    cities = sorted(POLAND_LOCATIONS[selected_v])
+                    print(f"\n--- Miasta ({selected_v}) ---")
+                    for j, c in enumerate(cities, 1):
+                        print(f"{j}. {c}")
+                    print(f"{len(cities)+1}. Wpisz inne miasto z tego województwa")
+                    
+                    c_choice = input("Wybierz miasto: ").strip()
+                    if c_choice.isdigit():
+                        c_idx = int(c_choice)
+                        if 1 <= c_idx <= len(cities):
+                            selected_location = cities[c_idx-1]
+                        elif c_idx == len(cities) + 1:
+                            custom_city = input("Wpisz nazwę miasta: ").strip()
+                            if custom_city: selected_location = custom_city
+                        else:
+                            print("[!] Nieprawidłowy numer miasta.")
+                    else:
+                        print("[!] Nieprawidłowy wybór.")
+                elif v_idx == len(voivodeships) + 1:
+                     custom_loc = input("Wpisz nazwę miasta: ").strip()
+                     if custom_loc: selected_location = custom_loc
+                else:
+                    print("[!] Nieprawidłowy numer województwa.")
+            else:
+                print("[!] Wpisz numer z listy.")
+
+        # 3. Emails (always on)
+        print(f"\nKROK 3/3: Pobieranie emaili")
+        print("Emaile będą pobierane automatycznie przy każdym uruchomieniu.")
+        selected_emails = True
+
+        print("\n" + "="*40)
+        print(f"KONFIGURACJA GOTOWA:")
+        print(f"Branża: {selected_query}")
+        print(f"Miasto: {selected_location}")
+        print(f"Emaile: {'TAK' if selected_emails else 'NIE'}")
+        print("="*40)
+        print("Uruchamiam proces scrapowania...\n")
+
+    def prompt_non_empty(prompt_text, disallow_path=False):
+        while True:
+            value = input(prompt_text).strip()
+            if not value:
+                print("Wartość nie może być pusta. Spróbuj ponownie.")
+                continue
+            if disallow_path and is_probably_path(value):
+                print("To wygląda jak ścieżka do pliku. Podaj normalną nazwę.")
+                continue
+            return value
+
+    # Finalize variables
+    query = (selected_query or args.query or "").strip()
+    if not query:
+        query = prompt_non_empty("Podaj branżę (query): ", disallow_path=True)
+    
+    location = (selected_location or args.location or "").strip()
+    if not location:
+        location = prompt_non_empty("Podaj miasto (location): ")
+        
+    scrape_emails_choice = True
+
+    # Resolve output path before scraping (to keep log filename aligned)
+    if not any([args.query, args.location]) and args.output == OUTPUT_FILE:
+        suggested_root = f"{slugify(query)}_{slugify(location)}"
+        chosen_name = prompt_for_filename(f"{suggested_root}")
+        output_path = ensure_output_path(chosen_name, args.format)
+    else:
+        output_path = ensure_output_path(args.output, args.format)
+    output_path = resolve_existing_output(output_path, args.format)
+
+    setup_run_logging(output_path)
     use_google_choice = True
     use_booksy_choice = True
 
@@ -1732,7 +2416,14 @@ def main():
 
     # Fetch data from Fresha (always)
     logger.info("=== Fetching data from Fresha ===")
-    all_fresha_results = scrape_fresha(normalized_query, location, session=session, max_pages=args.max_pages)
+    all_fresha_results = scrape_fresha(
+        normalized_query,
+        location,
+        session=session,
+        max_pages=args.max_pages,
+        use_headless=args.use_headless,
+        headless_wait=args.headless_wait
+    )
 
     # Fetch data from Moment.pl (Booksy mirror)
     logger.info("=== Fetching data from Moment.pl ===")
@@ -1859,28 +2550,59 @@ def main():
     # If user wants emails, fetch them for each business with a website URL
     if scrape_emails_choice:
         logger.info("=== Fetching emails from websites ===")
+        # Count businesses that already have emails from deep scrape
+        pre_email_count = sum(1 for r in all_results if r.get('emails'))
+        logger.info("Businesses with emails from deep scrape: %s", pre_email_count)
         total_with_website = sum(1 for result in all_results if result.get('website'))
         logger.info("Found %s businesses with website addresses.", total_with_website)
         
         processed_websites = 0
         for result in all_results: # No need for index 'i' if not used
             website = result.get('website')
+            profile_url = result.get('profile_url') or website
+            # Replace catalog URLs with real company websites when possible
+            if website and is_catalog_url(website) and profile_url:
+                if 'booksy.com' in profile_url:
+                    pdata = extract_booksy_profile_data(profile_url, session=session)
+                    external = pdata.get('website', '')
+                    if pdata.get('emails'):
+                        existing = result.get('emails') or []
+                        result['emails'] = list(dict.fromkeys(existing + pdata['emails']))
+                else:
+                    parsed = urlparse(profile_url)
+                    skip_domains = [
+                        parsed.netloc.lower(),
+                        'facebook.com', 'instagram.com', 'youtube.com', 'tiktok.com',
+                        'linkedin.com', 'google.', 'maps.google.'
+                    ]
+                    external = extract_external_website_from_profile(
+                        profile_url,
+                        session=session,
+                        skip_domains=skip_domains
+                    )
+                if external:
+                    website = external
+                    result['website'] = external
             if website:
                 processed_websites += 1
                 logger.info("[%s/%s] Fetching emails for: %s", processed_websites, total_with_website, result.get('name', 'Unknown Name'))
+                existing_emails = result.get('emails') or []
                 emails = extract_emails_from_website(
                     website,
                     session=session,
                     cache_conn=cache_conn,
-                    respect_robots=args.respect_robots
+                    respect_robots=args.respect_robots,
+                    use_headless=args.use_headless,
+                    headless_wait=args.headless_wait
                 )
-                result['emails'] = emails
+                merged = list(dict.fromkeys([e for e in (existing_emails + emails) if e]))
+                result['emails'] = merged
                 # Delay to avoid overloading servers
                 time.sleep(random.uniform(1.0, 2.0))
     
     # Save all data to Excel file
     if all_results:
-        save_results(all_results, args.output, args.format)
+        save_results(all_results, output_path, args.format)
     else:
         logger.info("No data to save.")
 

@@ -1,0 +1,28 @@
+2026-02-09 17:03:25,025 | INFO | Log file: logs\new_05_20260209_170325.log
+2026-02-09 17:03:25,026 | INFO | === Fetching data from Panorama Firm ===
+2026-02-09 17:03:25,026 | INFO | Scraping data from Panorama Firm for: spa in Wrocław
+2026-02-09 17:03:25,027 | INFO | Fetching page 1 from Panorama Firm...
+2026-02-09 17:03:25,729 | INFO | No more results found on page 1
+2026-02-09 17:03:25,730 | INFO | === Fetching data from PKT.pl ===
+2026-02-09 17:03:25,730 | INFO | Scraping data from PKT.pl for: spa in Wrocław
+2026-02-09 17:03:25,730 | INFO | Fetching page 1 from PKT.pl...
+2026-02-09 17:03:26,702 | INFO | No more results found on page 1
+2026-02-09 17:03:26,702 | INFO | === Fetching data from Booksy ===
+2026-02-09 17:03:29,758 | INFO | Scraping Booksy category 'masaz' for Wrocław
+2026-02-09 17:03:31,887 | INFO | Booksy: found 20 listings on page 1
+2026-02-09 17:03:34,355 | INFO | Booksy: found 20 listings on page 2
+2026-02-09 17:03:37,742 | INFO | Booksy: found 20 listings on page 3
+2026-02-09 17:05:14,910 | INFO | === Fetching data from SPAeden rankings ===
+2026-02-09 17:05:15,546 | INFO | SPAeden: extracted 13 ranking entries
+2026-02-09 17:05:15,546 | INFO | === Fetching data from Fresha ===
+2026-02-09 17:05:15,828 | WARNING | Fresha: 404 for https://www.fresha.com/lp/en/bt/spas/in/pl-wroclaw
+2026-02-09 17:05:15,988 | WARNING | Fresha: 404 for https://www.fresha.com/lp/en/bt/spas/in/wroclaw
+2026-02-09 17:05:25,345 | INFO | Fresha: extracted 0 listings from https://www.fresha.com/lp/en/bt/spas
+2026-02-09 17:05:33,543 | INFO | Fresha: extracted 0 listings from https://www.fresha.com/search?q=Wroc%C5%82aw
+2026-02-09 17:05:41,380 | INFO | Fresha: extracted 0 listings from https://www.fresha.com/search?q=spa+Wroc%C5%82aw
+2026-02-09 17:05:41,380 | INFO | === Fetching data from Moment.pl ===
+2026-02-09 17:05:41,381 | INFO | Moment.pl redirects to Booksy; reusing Booksy results.
+2026-02-09 17:05:42,976 | INFO | Scraping Booksy category 'masaz' for Wrocław
+2026-02-09 17:05:45,768 | INFO | Booksy: found 20 listings on page 1
+2026-02-09 17:05:49,893 | INFO | Booksy: found 20 listings on page 2
+2026-02-09 17:05:54,025 | INFO | Booksy: found 20 listings on page 3

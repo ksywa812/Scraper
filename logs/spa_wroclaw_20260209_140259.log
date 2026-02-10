@@ -1,0 +1,146 @@
+2026-02-09 14:02:59,715 | INFO | Log file: logs\spa_wroclaw_20260209_140259.log
+2026-02-09 14:02:59,716 | INFO | === Fetching data from Panorama Firm ===
+2026-02-09 14:02:59,716 | INFO | Scraping data from Panorama Firm for: spa in Wrocław
+2026-02-09 14:02:59,716 | INFO | Fetching page 1 from Panorama Firm...
+2026-02-09 14:03:00,558 | INFO | No more results found on page 1
+2026-02-09 14:03:00,559 | INFO | === Fetching data from PKT.pl ===
+2026-02-09 14:03:00,559 | INFO | Scraping data from PKT.pl for: spa in Wrocław
+2026-02-09 14:03:00,559 | INFO | Fetching page 1 from PKT.pl...
+2026-02-09 14:03:01,194 | INFO | No more results found on page 1
+2026-02-09 14:03:01,194 | INFO | === Fetching data from Booksy ===
+2026-02-09 14:03:03,406 | INFO | Scraping Booksy category 'masaz' for Wrocław
+2026-02-09 14:03:05,654 | INFO | Booksy: found 20 listings on page 1
+2026-02-09 14:03:09,178 | INFO | Booksy: found 20 listings on page 2
+2026-02-09 14:03:12,500 | INFO | Booksy: found 20 listings on page 3
+2026-02-09 14:03:14,488 | INFO | === Fetching data from SPAeden rankings ===
+2026-02-09 14:03:15,079 | INFO | SPAeden: extracted 13 ranking entries
+2026-02-09 14:03:15,079 | INFO | === Fetching data from Fresha ===
+2026-02-09 14:03:15,422 | WARNING | Fresha: 404 for https://www.fresha.com/lp/en/bt/spas/in/pl-wroclaw
+2026-02-09 14:03:15,587 | WARNING | Fresha: 404 for https://www.fresha.com/lp/en/bt/spas/in/wroclaw
+2026-02-09 14:03:24,629 | INFO | Fresha: extracted 0 listings from https://www.fresha.com/lp/en/bt/spas
+2026-02-09 14:03:32,608 | INFO | Fresha: extracted 0 listings from https://www.fresha.com/search?q=Wroc%C5%82aw
+2026-02-09 14:03:40,732 | INFO | Fresha: extracted 0 listings from https://www.fresha.com/search?q=spa+Wroc%C5%82aw
+2026-02-09 14:03:40,733 | INFO | === Fetching data from Moment.pl ===
+2026-02-09 14:03:40,733 | INFO | Moment.pl redirects to Booksy; reusing Booksy results.
+2026-02-09 14:03:43,747 | INFO | Scraping Booksy category 'masaz' for Wrocław
+2026-02-09 14:03:45,134 | INFO | Booksy: found 20 listings on page 1
+2026-02-09 14:03:48,574 | INFO | Booksy: found 20 listings on page 2
+2026-02-09 14:03:51,528 | INFO | Booksy: found 20 listings on page 3
+2026-02-09 14:03:53,147 | INFO | === Fetching data from Cylex ===
+2026-02-09 14:04:01,007 | WARNING | Cylex: Cloudflare block detected for https://www.cylex-polska.pl/firmy/?q=spa+Wroc%C5%82aw
+2026-02-09 14:04:01,008 | INFO | === Fetching data from Oferteo ===
+2026-02-09 14:04:18,778 | INFO | Oferteo: collected 0 profiles from https://www.oferteo.pl/firmy/wroclaw?q=spa
+2026-02-09 14:04:21,032 | INFO | Oferteo: collected 0 profiles from https://www.oferteo.pl/firmy/wroclaw?q=spa&page=2
+2026-02-09 14:04:23,370 | INFO | Oferteo: collected 0 profiles from https://www.oferteo.pl/firmy/wroclaw?q=spa&page=3
+2026-02-09 14:04:25,339 | INFO | === Fetching data from Firmy.net ===
+2026-02-09 14:04:29,194 | INFO | Firmy.net: collected 13 profiles
+2026-02-09 14:04:29,194 | INFO | === Fetching data from BiznesFinder ===
+2026-02-09 14:04:31,327 | INFO | BiznesFinder: collected 0 profiles
+2026-02-09 14:04:31,327 | INFO | === Fetching data from Fixly ===
+2026-02-09 14:04:41,359 | INFO | Fixly: no listings found on https://fixly.pl/kategoria/spa/wroclaw
+2026-02-09 14:04:41,359 | INFO | === Fetching data from Google Places API ===
+2026-02-09 14:04:41,544 | ERROR | API Error: REQUEST_DENIED - The provided API key is invalid.
+2026-02-09 14:04:41,545 | INFO | No results found in Google Places.
+2026-02-09 14:04:41,546 | INFO | After deduplication, we have 46 unique businesses.
+2026-02-09 14:04:41,547 | INFO | === Fetching emails from websites ===
+2026-02-09 14:04:41,547 | INFO | Found 33 businesses with website addresses.
+2026-02-09 14:04:41,547 | INFO | [1/33] Fetching emails for: Nakhon Thai Massage Białowieska 79C, 54-234, Wrocław, Fabryczna Karty podarunkowe Booksy
+2026-02-09 14:04:41,547 | INFO | Fetching emails from website: https://booksy.com/pl-pl/pl-pl/292752_nakhon-thai-massage_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:04:41,695 | ERROR | Error fetching emails from https://booksy.com/pl-pl/pl-pl/292752_nakhon-thai-massage_masaz_13750_wroclaw#ba_s=sr_1: 404 Client Error: Not Found for url: https://booksy.com/pl-pl/pl-pl/292752_nakhon-thai-massage_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:04:43,034 | INFO | [2/33] Fetching emails for: RUMI STUDIO URODY Ludwika Idzikowskiego 20/12, 54-129, Wrocław, Fabryczna
+2026-02-09 14:04:43,034 | INFO | Fetching emails from website: https://booksy.com/pl-pl/pl-pl/298329_rumi-studio-urody_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:04:43,473 | ERROR | Error fetching emails from https://booksy.com/pl-pl/pl-pl/298329_rumi-studio-urody_masaz_13750_wroclaw#ba_s=sr_1: 404 Client Error: Not Found for url: https://booksy.com/pl-pl/pl-pl/298329_rumi-studio-urody_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:04:45,351 | INFO | [3/33] Fetching emails for: Masaje Spa | Masaż | Masaże dla dwojga Wrocław Bolesława Drobnera 11-13 ( Hotel HP Park Plaza ), 50-257, Wrocław, Śródmieście
+2026-02-09 14:04:45,352 | INFO | Fetching emails from website: https://booksy.com/pl-pl/pl-pl/198103_masaje-spa-masaz-masaze-dla-dwojga-wroclaw_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:04:45,782 | ERROR | Error fetching emails from https://booksy.com/pl-pl/pl-pl/198103_masaje-spa-masaz-masaze-dla-dwojga-wroclaw_masaz_13750_wroclaw#ba_s=sr_1: 404 Client Error: Not Found for url: https://booksy.com/pl-pl/pl-pl/198103_masaje-spa-masaz-masaze-dla-dwojga-wroclaw_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:04:47,146 | INFO | [4/33] Fetching emails for: Salon masażu “Soma Touch” Jaworska 8e/1, 53-612, Wrocław, Fabryczna Karty podarunkowe Booksy
+2026-02-09 14:04:47,147 | INFO | Fetching emails from website: https://booksy.com/pl-pl/pl-pl/312345_salon-masazu-soma-touch_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:04:47,963 | ERROR | Error fetching emails from https://booksy.com/pl-pl/pl-pl/312345_salon-masazu-soma-touch_masaz_13750_wroclaw#ba_s=sr_1: 404 Client Error: Not Found for url: https://booksy.com/pl-pl/pl-pl/312345_salon-masazu-soma-touch_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:04:49,947 | INFO | [5/33] Fetching emails for: COCO ( Masaż Wrocław | masaż kobido | relaksacyjny | tajski | lomi lomi | balijski | massage for two) Białoskórnicza 5/, 50-134, Wrocław Karty podarunkowe Booksy
+2026-02-09 14:04:49,948 | INFO | Fetching emails from website: https://booksy.com/pl-pl/pl-pl/225127_coco-masaz-wroclaw-masaz-kobido-relaksacyjny-tajski-lomi-lomi-balijski-massage-for-two_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:04:50,399 | ERROR | Error fetching emails from https://booksy.com/pl-pl/pl-pl/225127_coco-masaz-wroclaw-masaz-kobido-relaksacyjny-tajski-lomi-lomi-balijski-massage-for-two_masaz_13750_wroclaw#ba_s=sr_1: 404 Client Error: Not Found for url: https://booksy.com/pl-pl/pl-pl/225127_coco-masaz-wroclaw-masaz-kobido-relaksacyjny-tajski-lomi-lomi-balijski-massage-for-two_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:04:52,382 | INFO | [6/33] Fetching emails for: Hero KOBIDO & MASAŻ Wrocław bulwar Ikara, 24 (Wejście w Salonie Różowe Oko Przy Rondzie W Osiedlu), 54-130, Wrocław, Fabryczna Karty podarunkowe Booksy
+2026-02-09 14:04:52,382 | INFO | Fetching emails from website: https://booksy.com/pl-pl/pl-pl/227109_hero-kobido-masaz-wroclaw_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:04:52,835 | ERROR | Error fetching emails from https://booksy.com/pl-pl/pl-pl/227109_hero-kobido-masaz-wroclaw_masaz_13750_wroclaw#ba_s=sr_1: 404 Client Error: Not Found for url: https://booksy.com/pl-pl/pl-pl/227109_hero-kobido-masaz-wroclaw_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:04:54,505 | INFO | [7/33] Fetching emails for: Massage Wroclaw Spa Białoskórnicza, 50-134, Wrocław
+2026-02-09 14:04:54,506 | INFO | Fetching emails from website: https://booksy.com/pl-pl/pl-pl/328179_massage-wroclaw-spa_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:04:55,307 | ERROR | Error fetching emails from https://booksy.com/pl-pl/pl-pl/328179_massage-wroclaw-spa_masaz_13750_wroclaw#ba_s=sr_1: 404 Client Error: Not Found for url: https://booksy.com/pl-pl/pl-pl/328179_massage-wroclaw-spa_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:04:56,922 | INFO | [8/33] Fetching emails for: Gloria Spa Stacyjna 1/2, 53-613, Wrocław Karty podarunkowe Booksy
+2026-02-09 14:04:56,923 | INFO | Fetching emails from website: https://booksy.com/pl-pl/pl-pl/293386_gloria-spa_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:04:57,722 | ERROR | Error fetching emails from https://booksy.com/pl-pl/pl-pl/293386_gloria-spa_masaz_13750_wroclaw#ba_s=sr_1: 404 Client Error: Not Found for url: https://booksy.com/pl-pl/pl-pl/293386_gloria-spa_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:04:59,614 | INFO | [9/33] Fetching emails for: Terapia Bowena Ilona Strączek Wejście do lokalu bezpośrednio z chodnika, Kozanowska 81, 54-152, Wrocław, Fabryczna Karty podarunkowe Booksy
+2026-02-09 14:04:59,615 | INFO | Fetching emails from website: https://booksy.com/pl-pl/pl-pl/281756_terapia-bowena-ilona-straczek_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:05:00,413 | ERROR | Error fetching emails from https://booksy.com/pl-pl/pl-pl/281756_terapia-bowena-ilona-straczek_masaz_13750_wroclaw#ba_s=sr_1: 404 Client Error: Not Found for url: https://booksy.com/pl-pl/pl-pl/281756_terapia-bowena-ilona-straczek_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:05:02,409 | INFO | [10/33] Fetching emails for: Studio Masażu Wrocław Rogowska 52A, 54-440, Wrocław, Fabryczna Karty podarunkowe Booksy
+2026-02-09 14:05:02,410 | INFO | Fetching emails from website: https://booksy.com/pl-pl/pl-pl/214400_studio-masazu-wroclaw_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:05:02,869 | ERROR | Error fetching emails from https://booksy.com/pl-pl/pl-pl/214400_studio-masazu-wroclaw_masaz_13750_wroclaw#ba_s=sr_1: 404 Client Error: Not Found for url: https://booksy.com/pl-pl/pl-pl/214400_studio-masazu-wroclaw_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:05:04,080 | INFO | [11/33] Fetching emails for: LICO I CIAŁO
+2026-02-09 14:05:04,081 | INFO | Fetching emails from website: https://booksy.com/pl-pl/pl-pl/173954_lico-i-cialo-rytualy-masazu_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:05:04,214 | ERROR | Error fetching emails from https://booksy.com/pl-pl/pl-pl/173954_lico-i-cialo-rytualy-masazu_masaz_13750_wroclaw#ba_s=sr_1: 404 Client Error: Not Found for url: https://booksy.com/pl-pl/pl-pl/173954_lico-i-cialo-rytualy-masazu_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:05:05,634 | INFO | [12/33] Fetching emails for: Llarion_masaż Śrutowa 4/4 Pierwsze piętro Lokal 4 Śrutowa 4, 4, 50-256, Wrocław, Śródmieście Karty podarunkowe Booksy
+2026-02-09 14:05:05,635 | INFO | Fetching emails from website: https://booksy.com/pl-pl/pl-pl/154509_llarion-masaz-srutowa-4-4-pierwsze-pietro-lokal-4_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:05:05,777 | ERROR | Error fetching emails from https://booksy.com/pl-pl/pl-pl/154509_llarion-masaz-srutowa-4-4-pierwsze-pietro-lokal-4_masaz_13750_wroclaw#ba_s=sr_1: 404 Client Error: Not Found for url: https://booksy.com/pl-pl/pl-pl/154509_llarion-masaz-srutowa-4-4-pierwsze-pietro-lokal-4_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:05:07,304 | INFO | [13/33] Fetching emails for: LIMFA Centrum Terapii Limfatycznej i Masażu ⚠️-10% na pierwszą wizytę przy rezerwacji telefonicznej☎️, Łaciarska 7, 50-104, Wrocław Karty podarunkowe Booksy
+2026-02-09 14:05:07,305 | INFO | Fetching emails from website: https://booksy.com/pl-pl/pl-pl/239035_limfa-centrum-terapii-limfatycznej-i-masazu_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:05:07,747 | ERROR | Error fetching emails from https://booksy.com/pl-pl/pl-pl/239035_limfa-centrum-terapii-limfatycznej-i-masazu_masaz_13750_wroclaw#ba_s=sr_1: 404 Client Error: Not Found for url: https://booksy.com/pl-pl/pl-pl/239035_limfa-centrum-terapii-limfatycznej-i-masazu_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:05:09,629 | INFO | [14/33] Fetching emails for: Masaże Hollywood Magic Touch Wrocław Gen. Władysława Sikorskiego 5/5e, 53-659, Wrocław
+2026-02-09 14:05:09,629 | INFO | Fetching emails from website: https://booksy.com/pl-pl/pl-pl/301861_masaze-hollywood-magic-touch-wroclaw_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:05:10,691 | ERROR | Error fetching emails from https://booksy.com/pl-pl/pl-pl/301861_masaze-hollywood-magic-touch-wroclaw_masaz_13750_wroclaw#ba_s=sr_1: 404 Client Error: Not Found for url: https://booksy.com/pl-pl/pl-pl/301861_masaze-hollywood-magic-touch-wroclaw_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:05:12,475 | INFO | [15/33] Fetching emails for: Dotyk zdrowia studio masażu Tadeusza Kościuszki 5/2, 50-438, Wrocław, Krzyki Karty podarunkowe Booksy
+2026-02-09 14:05:12,476 | INFO | Fetching emails from website: https://booksy.com/pl-pl/pl-pl/327869_dotyk-zdrowia-studio-masazu_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:05:13,280 | ERROR | Error fetching emails from https://booksy.com/pl-pl/pl-pl/327869_dotyk-zdrowia-studio-masazu_masaz_13750_wroclaw#ba_s=sr_1: 404 Client Error: Not Found for url: https://booksy.com/pl-pl/pl-pl/327869_dotyk-zdrowia-studio-masazu_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:05:14,479 | INFO | [16/33] Fetching emails for: Studio Viktoria Kasta Sokolnicza 7/17 lokal 13, 54-152, Wrocław, Fabryczna
+2026-02-09 14:05:14,479 | INFO | Fetching emails from website: https://booksy.com/pl-pl/pl-pl/213475_studio-viktoria-kasta_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:05:14,922 | ERROR | Error fetching emails from https://booksy.com/pl-pl/pl-pl/213475_studio-viktoria-kasta_masaz_13750_wroclaw#ba_s=sr_1: 404 Client Error: Not Found for url: https://booksy.com/pl-pl/pl-pl/213475_studio-viktoria-kasta_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:05:15,983 | INFO | [17/33] Fetching emails for: Harmoniaj Dotyku Zelwerowicza 16, 53-676, Wrocław
+2026-02-09 14:05:15,983 | INFO | Fetching emails from website: https://booksy.com/pl-pl/pl-pl/163355_harmoniaj-dotyku_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:05:16,447 | ERROR | Error fetching emails from https://booksy.com/pl-pl/pl-pl/163355_harmoniaj-dotyku_masaz_13750_wroclaw#ba_s=sr_1: 404 Client Error: Not Found for url: https://booksy.com/pl-pl/pl-pl/163355_harmoniaj-dotyku_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:05:18,095 | INFO | [18/33] Fetching emails for: FEU.Studio Masażu | Tattoo | Wrocław Wita Stwosza 3, 120, 50-102, Wrocław Karty podarunkowe Booksy
+2026-02-09 14:05:18,096 | INFO | Fetching emails from website: https://booksy.com/pl-pl/pl-pl/241882_feu-studio-masazu-tattoo-wroclaw_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:05:18,228 | ERROR | Error fetching emails from https://booksy.com/pl-pl/pl-pl/241882_feu-studio-masazu-tattoo-wroclaw_masaz_13750_wroclaw#ba_s=sr_1: 404 Client Error: Not Found for url: https://booksy.com/pl-pl/pl-pl/241882_feu-studio-masazu-tattoo-wroclaw_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:05:19,388 | INFO | [19/33] Fetching emails for: Orion medycyna holistyczna Anna Walczak Tęczowa 20, 53-601, Wrocław
+2026-02-09 14:05:19,389 | INFO | Fetching emails from website: https://booksy.com/pl-pl/pl-pl/134663_orion-medycyna-holistyczna-anna-walczak_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:05:19,553 | ERROR | Error fetching emails from https://booksy.com/pl-pl/pl-pl/134663_orion-medycyna-holistyczna-anna-walczak_masaz_13750_wroclaw#ba_s=sr_1: 404 Client Error: Not Found for url: https://booksy.com/pl-pl/pl-pl/134663_orion-medycyna-holistyczna-anna-walczak_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:05:20,667 | INFO | [20/33] Fetching emails for: Belleza Ulica Pomorska 59, Wejście do salonu fryzjerskiego, 50-075, Wrocław
+2026-02-09 14:05:20,667 | INFO | Fetching emails from website: https://booksy.com/pl-pl/pl-pl/309216_belleza_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:05:20,830 | ERROR | Error fetching emails from https://booksy.com/pl-pl/pl-pl/309216_belleza_masaz_13750_wroclaw#ba_s=sr_1: 404 Client Error: Not Found for url: https://booksy.com/pl-pl/pl-pl/309216_belleza_masaz_13750_wroclaw#ba_s=sr_1
+2026-02-09 14:05:22,299 | INFO | [21/33] Fetching emails for: Słoneczko Gabinet Odnowy Biologicznej
+2026-02-09 14:05:22,299 | INFO | Fetching emails from website: https://www.firmy.net/odnowa-biologiczna-i-spa/sloneczko,9P6MX.html
+2026-02-09 14:05:32,498 | INFO | Found 0 unique email addresses.
+2026-02-09 14:05:34,383 | INFO | [22/33] Fetching emails for: Atmosfera Studio SPA Izabela Kielich
+2026-02-09 14:05:34,384 | INFO | Fetching emails from website: https://www.firmy.net/gabinety-kosmetyczne/atmosferaspa,WCGT4.html
+2026-02-09 14:05:44,014 | INFO | Found 0 unique email addresses.
+2026-02-09 14:05:45,128 | INFO | [23/33] Fetching emails for: DERMIKA Salon SPA
+2026-02-09 14:05:45,129 | INFO | Fetching emails from website: https://www.firmy.net/salony-pieknosci/dermika,YFBXF.html
+2026-02-09 14:05:55,083 | INFO | Found 0 unique email addresses.
+2026-02-09 14:05:56,682 | INFO | [24/33] Fetching emails for: Alan - Sauny, Łaźnie, Kominki
+2026-02-09 14:05:56,683 | INFO | Fetching emails from website: https://www.firmy.net/odnowa-biologiczna-i-spa/alan,9QGD.html
+2026-02-09 14:06:06,512 | INFO | Found 0 unique email addresses.
+2026-02-09 14:06:07,809 | INFO | [25/33] Fetching emails for: Piechocińska Joanna Centrum Kondycji i Urody
+2026-02-09 14:06:07,809 | INFO | Fetching emails from website: https://www.firmy.net/odnowa-biologiczna-i-spa/odchudzanie,9VHNG.html
+2026-02-09 14:06:17,636 | INFO | Found 0 unique email addresses.
+2026-02-09 14:06:19,535 | INFO | [26/33] Fetching emails for: Studio Nicoll Gabinet Odnowy Biologicznej
+2026-02-09 14:06:19,535 | INFO | Fetching emails from website: https://www.firmy.net/odnowa-biologiczna-i-spa/studio-nicoll,96SMC.html
+2026-02-09 14:06:29,735 | INFO | Found 0 unique email addresses.
+2026-02-09 14:06:30,921 | INFO | [27/33] Fetching emails for: Namaste Praktyka Jogi
+2026-02-09 14:06:30,922 | INFO | Fetching emails from website: https://www.firmy.net/odnowa-biologiczna-i-spa/praktyka-jogi,Q5R2R.html
+2026-02-09 14:06:40,926 | INFO | Found 0 unique email addresses.
+2026-02-09 14:06:42,728 | INFO | [28/33] Fetching emails for: Landeck - Inspa
+2026-02-09 14:06:42,728 | INFO | Fetching emails from website: https://www.firmy.net/odnowa-biologiczna-i-spa/inspa,W21PH.html
+2026-02-09 14:06:52,963 | INFO | Found 0 unique email addresses.
+2026-02-09 14:06:54,271 | INFO | [29/33] Fetching emails for: Solarium Sunrise Studio
+2026-02-09 14:06:54,271 | INFO | Fetching emails from website: https://www.firmy.net/odnowa-biologiczna-i-spa/sunrise-studio,WGYYR.html
+2026-02-09 14:07:04,327 | INFO | Found 0 unique email addresses.
+2026-02-09 14:07:05,477 | INFO | [30/33] Fetching emails for: SPA System
+2026-02-09 14:07:05,477 | INFO | Fetching emails from website: https://www.firmy.net/wyposazenie-lazienki/spa-system,WG8KM.html
+2026-02-09 14:07:15,657 | INFO | Found 0 unique email addresses.
+2026-02-09 14:07:16,684 | INFO | [31/33] Fetching emails for: Wellness & SPA Hotel Monopol
+2026-02-09 14:07:16,684 | INFO | Fetching emails from website: https://www.firmy.net/odnowa-biologiczna-i-spa/wellness-spa,W8S13.html
+2026-02-09 14:07:26,406 | INFO | Found 0 unique email addresses.
+2026-02-09 14:07:27,842 | INFO | [32/33] Fetching emails for: SpaBiznes Consulting
+2026-02-09 14:07:27,843 | INFO | Fetching emails from website: https://www.firmy.net/odnowa-biologiczna-i-spa/spabiznes,WK2GH.html
+2026-02-09 14:07:38,278 | INFO | Found 0 unique email addresses.
+2026-02-09 14:07:40,049 | INFO | [33/33] Fetching emails for: FISH Marta SPA
+2026-02-09 14:07:40,050 | INFO | Fetching emails from website: https://www.firmy.net/odnowa-biologiczna-i-spa/fish-spa,W19XQ.html
+2026-02-09 14:07:50,112 | INFO | Found 0 unique email addresses.
+2026-02-09 14:25:43,434 | INFO | Saved 46 records to new_03.xlsx

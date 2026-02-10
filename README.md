@@ -106,12 +106,11 @@ This tool is intended to help streamline lead generation and market research by 
     ```bash
     python scraper.py
     ```
-4.  The script will then prompt you for the following information:
-    *   **Industry/Query:** (e.g., `hairdresser`, `restaurant`, `software company`)
-    *   **City/Location:** (e.g., `Krakow`, `Warsaw`)
-    *   **Extract Emails? (y/n):** Whether to attempt email extraction from websites.
-    *   **Use Google Places API? (y/n):** Whether to include Google Places in the search (requires API key).
-5.  If an output file (e.g., `results.xlsx`) already exists, you will be prompted to confirm if you want to overwrite it or provide a new filename.
+4.  The script will run a step-by-step wizard:
+    *   **Industry/Query** (category list + custom option)
+    *   **City/Location** (voivodeship → city list)
+    *   **Extract Emails** (yes/no)
+5.  At the end, you will be asked for the output filename (default suggestion included).
 6.  The script will print progress updates to the console.
 7.  Once completed, the results will be saved in the chosen format (default: `results.xlsx`) in the project directory.
 
@@ -145,6 +144,17 @@ Available flags:
 *   **Rate Limiting:** The script includes random delays and User-Agent rotation as basic politeness measures. Aggressive scraping can lead to IP bans.
 *   **Data Privacy:** Be responsible with the data you collect and adhere to relevant data privacy regulations (e.g., GDPR).
 *   This tool should be used responsibly and ethically. The author is not responsible for any misuse of this script.
+
+## Runtime Notes & Known Limitations
+
+*   **Per-run logs:** Each run writes a timestamped log file to the `logs/` folder (e.g., `logs/spa_wroclaw_YYYYMMDD_HHMMSS.log`).
+*   **Google Places API:** Requires a valid `GOOGLE_MAPS_API_KEY` with Places API enabled. Invalid keys will return `REQUEST_DENIED`.
+*   **Headless scraping:** Some sources require JS rendering. The script can use a headless browser (`undetected-chromedriver`) when enabled.
+*   **Cylex:** часто blokuje ruch (Cloudflare). Bez proxy wyniki mogą być puste.
+*   **Fresha:** lokalizacje używają własnych slugów. W razie 404 skrypt stosuje fallback bez lokalizacji.
+*   **Booksy/Moment:** Booksy posiada własne slugi kategorii i miast — w razie braku dopasowania wyniki mogą być puste.
+*   **Firmy.net:** link do prawdziwej strony firmy bywa ukryty w JS; ekstrakcja jest best‑effort.
+*   **Email extraction:** działa tylko dla stron firm. Jeśli źródło podaje wyłącznie link do katalogu, emaile mogą się nie pojawić.
 
 ## Potential Future Improvements
 
