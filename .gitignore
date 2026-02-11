@@ -1,0 +1,15 @@
+# Ignore runtime and generated folders
+logs/
+scraped/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual env
+.venv/
+
+# SQLite DBs and env files
+*.sqlite
+.env
