@@ -2047,72 +2047,512 @@ def extract_emails_from_website(url, session=None, cache_conn=None, respect_robo
         logger.error("Error fetching emails from %s: %s", url, e)
         return []
 
-def merge_results(google_results, panorama_results, pkt_results):
-    """Merges results from different sources and removes duplicates."""
+def annotate_sources(results_list, source_name):
+    """Ensure each result has a 'sources' list and add the given source name."""
+    if not results_list:
+        return
+    for r in results_list:
+        r.setdefault('sources', [])
+        if source_name not in r['sources']:
+            r['sources'].append(source_name)
+
+
+def merge_results(*lists):
+    """Merge multiple result lists into unique records, merging fields and prioritizing Booksy emails.
+
+    Matching key: normalized_name | simple_address | normalized_phone
+    Merging rules:
+    - Union emails (unique); if a source labelled 'booksy' provides emails, place them first.
+    - Fill empty fields (website, profile_url, phone, address) from other sources when available.
+    - Collect 'sources' for each merged record.
+    """
     all_results = []
-    all_results.extend(google_results)
-    all_results.extend(panorama_results)
-    all_results.extend(pkt_results)
-    
-    # Remove duplicates based on name and address
-    unique_results = []
-    unique_keys = set()
-    
-    for result in all_results:
-        name = result.get('name', '').strip()
+    for lst in lists:
+        if not lst:
+            continue
+        all_results.extend(lst)
+
+    merged = {}
+    insertion_order = []
+
+    for r in all_results:
+        name = r.get('name', '').strip()
         normalized_name = normalize_name(name)
-        address_parts = normalize_address(result.get('formatted_address', '')).split(',')
+        address_parts = normalize_address(r.get('formatted_address', '')).split(',')
         simple_address = address_parts[0].strip() if address_parts else ""
-        
+        phone = normalize_phone(r.get('formatted_phone_number', ''))
+
         if not normalized_name:
-            continue  # Skip entries without a name
-
-        phone = normalize_phone(result.get('formatted_phone_number', ''))
-        key = f"{normalized_name}|{simple_address}|{phone}"
-
-        if key in unique_keys:
             continue
 
-        unique_keys.add(key)
-        unique_results.append(result)
+        key = f"{normalized_name}|{simple_address}|{phone}"
 
-    return unique_results
+        if key in merged:
+            existing = merged[key]
+            # Merge sources
+            for s in r.get('sources', []):
+                if s not in existing['sources']:
+                    existing['sources'].append(s)
 
-def save_to_excel(data, filename=OUTPUT_FILE):
-    """Saves data to an Excel file."""
+            # Merge emails with Booksy priority
+            existing_emails = existing.get('emails') or []
+            new_emails = r.get('emails') or []
+            if 'booksy' in r.get('sources', []):
+                combined = new_emails + [e for e in existing_emails if e not in new_emails]
+            else:
+                combined = existing_emails + [e for e in new_emails if e not in existing_emails]
+
+            # Deduplicate preserving order
+            seen = set()
+            final_emails = []
+            for e in combined:
+                if e and e not in seen:
+                    seen.add(e)
+                    final_emails.append(e)
+            existing['emails'] = final_emails
+
+            # Fill missing fields (prefer non-empty)
+            if not existing.get('website') and r.get('website'):
+                existing['website'] = r.get('website')
+            if not existing.get('profile_url') and r.get('profile_url'):
+                existing['profile_url'] = r.get('profile_url')
+            if not existing.get('formatted_phone_number') and r.get('formatted_phone_number'):
+                existing['formatted_phone_number'] = r.get('formatted_phone_number')
+            if not existing.get('formatted_address') and r.get('formatted_address'):
+                existing['formatted_address'] = r.get('formatted_address')
+            if not existing.get('name') and r.get('name'):
+                existing['name'] = r.get('name')
+
+        else:
+            new = dict(r)
+            new.setdefault('sources', list(r.get('sources', [])))
+            new['emails'] = list(dict.fromkeys(new.get('emails') or []))
+            merged[key] = new
+            insertion_order.append(key)
+
+    return [merged[k] for k in insertion_order]
+
+def save_to_excel(data, filename=OUTPUT_FILE, city=None, append=False):
+    """Saves data to an Excel file. If target is the IdeaMusicLeads template, append into it
+    and preserve layout/style, insert a colored city header row, set Status='to call', and
+    ensure email2/email3 columns exist (hidden).
+    """
     try:
+        template_path = os.path.join('scraped', 'IdeaMusicLeads.xlsx')
+        target_basename = os.path.basename(filename or '')
+
+        # If we're updating the live IdeaMusicLeads.xlsx, open and append
+        if os.path.exists(template_path) and target_basename.lower() == os.path.basename(template_path).lower():
+            wb = openpyxl.load_workbook(template_path)
+            ws = wb[wb.sheetnames[0]]
+
+            # Read header row (assume row 1)
+            headers = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1))]
+            # Normalize headers list
+            while headers and headers[-1] is None:
+                headers.pop()
+
+            # Ensure email 2/3 columns exist immediately after 'Adres E-mail'
+            try:
+                if 'Adres E-mail' in headers:
+                    idx = headers.index('Adres E-mail') + 1
+                    if idx >= len(headers) or headers[idx] != 'Adres E-mail 2':
+                        headers.insert(idx, 'Adres E-mail 2')
+                    if idx + 1 >= len(headers) or headers[idx + 1] != 'Adres E-mail 3':
+                        headers.insert(idx + 1, 'Adres E-mail 3')
+                else:
+                    # fallback: append
+                    headers.extend(['Adres E-mail', 'Adres E-mail 2', 'Adres E-mail 3'])
+            except Exception:
+                headers = headers + ['Adres E-mail', 'Adres E-mail 2', 'Adres E-mail 3']
+
+            # Ensure 'Status' and 'Data kontaktu' columns close to emails
+            if 'Status' not in headers:
+                # Insert Status after email columns
+                try:
+                    status_insert_idx = headers.index('Adres E-mail 3') + 1
+                except Exception:
+                    status_insert_idx = len(headers)
+                headers.insert(status_insert_idx, 'Status')
+            if 'Data kontaktu' not in headers:
+                headers.insert(headers.index('Status') + 1, 'Data kontaktu')
+
+            # Decide whether to move existing 'Status' column to be right after email 3
+            try:
+                current_status_idx = headers.index('Status')
+                desired_idx = headers.index('Adres E-mail 3') + 1
+                if current_status_idx != desired_idx:
+                    move_status_column = (current_status_idx + 1, desired_idx + 1)  # store 1-based indices
+                else:
+                    move_status_column = None
+            except Exception:
+                move_status_column = None
+
+            # Ensure 'Other Emails' and 'Sources' exist at the end
+            if 'Other Emails' not in headers:
+                headers.append('Other Emails')
+            if 'Sources' not in headers:
+                headers.append('Sources')
+
+            # If actual sheet headings in file differ, ensure columns exist in sheet by adding empty cells
+            existing_header_cells = list(ws.iter_rows(min_row=1, max_row=1, values_only=False))[0]
+            current_col_count = len(existing_header_cells)
+            needed_cols = len(headers)
+            if needed_cols > current_col_count:
+                for c in range(current_col_count + 1, needed_cols + 1):
+                    ws.cell(row=1, column=c, value=headers[c - 1])
+            else:
+                # Update header names to reflect our canonical names where applicable
+                for i, h in enumerate(headers, start=1):
+                    ws.cell(row=1, column=i, value=h)
+
+            # If requested, move existing 'Status' column to be right after email 3
+            try:
+                if move_status_column:
+                    old_idx_1based, desired_idx_1based = move_status_column
+                    # Copy old column values
+                    rows_count = ws.max_row
+                    temp_values = [ws.cell(row=r, column=old_idx_1based).value for r in range(1, rows_count + 1)]
+                    # Insert new empty column at desired index
+                    ws.insert_cols(desired_idx_1based)
+                    # Set values into the newly inserted column
+                    for r, v in enumerate(temp_values, start=1):
+                        ws.cell(row=r, column=desired_idx_1based, value=v)
+                    # Adjust old column index (it may have shifted if old<desired)
+                    if old_idx_1based > desired_idx_1based:
+                        old_to_delete = old_idx_1based + 1
+                    else:
+                        old_to_delete = old_idx_1based
+                    ws.delete_cols(old_to_delete)
+                    # Re-read headers after move
+                    headers = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1))]
+            except Exception:
+                pass
+
+            # If append was requested, merge new data into existing rows and append only new records
+            if append:
+                # Build header->col index map
+                header_index = {h: i+1 for i, h in enumerate(headers)}
+
+                # Build existing records map: key -> row index
+                existing_map = {}
+                for r in range(2, ws.max_row + 1):
+                    name_cell = ws.cell(row=r, column=header_index.get('Nazwa Salonu', 1)).value
+                    addr_cell = ws.cell(row=r, column=header_index.get('Adres', 2)).value
+                    phone_cell = ws.cell(row=r, column=header_index.get('Numer Telefonu', 3)).value
+                    if not name_cell:
+                        continue
+                    key = f"{normalize_name(name_cell)}|{normalize_address(addr_cell)}|{normalize_phone(str(phone_cell) if phone_cell else '')}"
+                    existing_map[key] = r
+
+                to_append = []
+                updated_count = 0
+                for item in data:
+                    name_val = item.get('name', '')
+                    addr_val = item.get('formatted_address', '')
+                    phone_val = item.get('formatted_phone_number', '')
+                    key = f"{normalize_name(name_val)}|{normalize_address(addr_val)}|{normalize_phone(phone_val)}"
+
+                    new_emails = item.get('emails') or []
+                    new_sources = item.get('sources') or []
+
+                    if key in existing_map:
+                        rownum = existing_map[key]
+                        # Read existing emails
+                        existing_emails = []
+                        main_e = ws.cell(row=rownum, column=header_index.get('Adres E-mail')).value or ''
+                        e2 = ws.cell(row=rownum, column=header_index.get('Adres E-mail 2')).value or ''
+                        e3 = ws.cell(row=rownum, column=header_index.get('Adres E-mail 3')).value or ''
+                        other = ws.cell(row=rownum, column=header_index.get('Other Emails')).value or ''
+                        import re
+                        m = re.match(r"^([^\(]+)\s*(?:\(([^)]+)\))?", str(main_e))
+                        if m:
+                            first = m.group(1).strip()
+                            if first:
+                                existing_emails.append(first)
+                            if m.group(2):
+                                for part in m.group(2).split(','):
+                                    p = part.strip()
+                                    if p:
+                                        existing_emails.append(p)
+                        if e2:
+                            existing_emails.append(e2)
+                        if e3:
+                            existing_emails.append(e3)
+                        if other:
+                            for p in str(other).split(','):
+                                p = p.strip()
+                                if p:
+                                    existing_emails.append(p)
+
+                        # Merge emails with Booksy priority
+                        if 'booksy' in new_sources:
+                            combined = new_emails + [e for e in existing_emails if e not in new_emails]
+                        else:
+                            combined = existing_emails + [e for e in new_emails if e not in existing_emails]
+
+                        # Deduplicate preserving order
+                        seen = set()
+                        final = []
+                        for e in combined:
+                            if e and e not in seen:
+                                seen.add(e)
+                                final.append(e)
+
+                        # Write back: main, e2, e3, other
+                        ws.cell(row=rownum, column=header_index.get('Adres E-mail')).value = final[0] if final else ''
+                        ws.cell(row=rownum, column=header_index.get('Adres E-mail 2')).value = final[1] if len(final) > 1 else ''
+                        ws.cell(row=rownum, column=header_index.get('Adres E-mail 3')).value = final[2] if len(final) > 2 else ''
+                        ws.cell(row=rownum, column=header_index.get('Other Emails')).value = ', '.join(final[3:]) if len(final) > 3 else ''
+
+                        # Update phone if missing
+                        if header_index.get('Numer Telefonu'):
+                            if not (ws.cell(row=rownum, column=header_index['Numer Telefonu']).value) and phone_val:
+                                ws.cell(row=rownum, column=header_index['Numer Telefonu']).value = phone_val
+
+                        # Update Sources column
+                        old_src = ws.cell(row=rownum, column=header_index.get('Sources')).value or ''
+                        old_src_set = set(s.strip() for s in str(old_src).split(',') if s.strip())
+                        new_src_set = set(new_sources)
+                        all_src = ', '.join(sorted(old_src_set.union(new_src_set)))
+                        ws.cell(row=rownum, column=header_index.get('Sources')).value = all_src
+
+                        # Set Status to 'to call' and clear contact date
+                        ws.cell(row=rownum, column=header_index.get('Status')).value = 'to call'
+                        if header_index.get('Data kontaktu'):
+                            ws.cell(row=rownum, column=header_index.get('Data kontaktu')).value = ''
+
+                        updated_count += 1
+
+                    else:
+                        to_append.append(item)
+
+                # Append new rows under the appropriate city block (insert under existing city header or add header after last data row)
+                if to_append:
+                    city_name = (city or '').upper().strip()
+                    city_header_row = None
+                    # Find the last occurrence of this city header (search column 1)
+                    for r in range(1, ws.max_row + 1):
+                        v = ws.cell(row=r, column=1).value
+                        if not v:
+                            continue
+                        try:
+                            vs = str(v).strip().upper()
+                        except Exception:
+                            continue
+                        if vs == city_name or vs == f'!{city_name}':
+                            city_header_row = r
+
+                    if city_header_row:
+                        # Ensure header is marked with '!'
+                        header_cell = ws.cell(row=city_header_row, column=1)
+                        if not str(header_cell.value).strip().startswith('!'):
+                            header_cell.value = f"!{str(header_cell.value).strip()}"
+
+                        # Find next merged header row (if any) to determine end of this city's block
+                        next_header_row = None
+                        for merged in ws.merged_cells.ranges:
+                            try:
+                                min_row = merged.min_row
+                                min_col = merged.min_col
+                            except Exception:
+                                continue
+                            if min_col == 1 and min_row > city_header_row:
+                                if next_header_row is None or min_row < next_header_row:
+                                    next_header_row = min_row
+
+                        if next_header_row:
+                            insert_row = next_header_row
+                        else:
+                            insert_row = ws.max_row + 1
+
+                    else:
+                        # No existing city header: insert after last non-empty row
+                        last_non_empty = 1
+                        for r in range(ws.max_row, 1, -1):
+                            has_any = False
+                            for c in range(1, len(headers) + 1):
+                                if ws.cell(row=r, column=c).value not in (None, ''):
+                                    has_any = True
+                                    break
+                            if has_any:
+                                last_non_empty = r
+                                break
+
+                        insert_row = last_non_empty + 1
+                        # Insert city header with '!' prefix
+                        ws.insert_rows(insert_row)
+                        ws.merge_cells(start_row=insert_row, start_column=1, end_row=insert_row, end_column=len(headers))
+                        cell = ws.cell(row=insert_row, column=1)
+                        cell.value = f"!{city_name}" if city_name else ''
+                        from openpyxl.styles import PatternFill, Font, Alignment
+                        cell.fill = PatternFill(start_color='1F4E78', end_color='1F4E78', fill_type='solid')
+                        cell.font = Font(color='FFFFFF', bold=True)
+                        cell.alignment = Alignment(horizontal='center')
+                        insert_row += 1
+
+                    # Insert new rows starting at insert_row
+                    for idx, item in enumerate(to_append):
+                        emails = item.get('emails', []) or []
+                        sources = item.get('sources') or []
+                        main_email = ''
+                        if emails:
+                            main_email = emails[0]
+                            if len(emails) > 1:
+                                additional = ', '.join(emails[1:3])
+                                main_email = f"{main_email} ({additional})"
+                        other_emails = ', '.join(emails[3:]) if len(emails) > 3 else ''
+
+                        row_vals = []
+                        for h in headers:
+                            key = (h or '').strip().lower()
+                            if key in ('nazwa salonu', 'name'):
+                                row_vals.append(item.get('name', ''))
+                            elif key in ('adres', 'address'):
+                                row_vals.append(item.get('formatted_address', ''))
+                            elif key in ('numer telefonu', 'phone'):
+                                row_vals.append(item.get('formatted_phone_number', ''))
+                            elif key in ('adres e-mail', 'adres e-mail 1', 'email 1'):
+                                row_vals.append(main_email)
+                            elif key == 'adres e-mail 2':
+                                row_vals.append(emails[1] if len(emails) > 1 else '')
+                            elif key == 'adres e-mail 3':
+                                row_vals.append(emails[2] if len(emails) > 2 else '')
+                            elif key == 'status':
+                                row_vals.append('to call')
+                            elif key == 'data kontaktu':
+                                row_vals.append('')
+                            elif key == 'other emails':
+                                row_vals.append(other_emails)
+                            elif key == 'sources':
+                                row_vals.append(', '.join(sources))
+                            else:
+                                row_vals.append('')
+
+                        ws.insert_rows(insert_row + idx)
+                        for ci, v in enumerate(row_vals, start=1):
+                            ws.cell(row=insert_row + idx, column=ci).value = v
+
+                    # Hide email 2/3 columns
+                    try:
+                        col_idx_email2 = headers.index('Adres E-mail 2') + 1
+                        col_idx_email3 = headers.index('Adres E-mail 3') + 1
+                        col_letter_2 = openpyxl.utils.get_column_letter(col_idx_email2)
+                        col_letter_3 = openpyxl.utils.get_column_letter(col_idx_email3)
+                        ws.column_dimensions[col_letter_2].hidden = True
+                        ws.column_dimensions[col_letter_3].hidden = True
+                        ws.column_dimensions[col_letter_2].width = 0
+                        ws.column_dimensions[col_letter_3].width = 0
+                    except Exception:
+                        pass
+
+                # Save and finish merge/append (avoid appending all items again)
+                appended_count = len(to_append)
+                wb.save(template_path)
+                logger.info("Updated %s existing rows and appended %s new records to %s", updated_count, appended_count, template_path)
+                return
+            else:
+                # Insert city header row (one long colored row with white font)
+                insert_row = ws.max_row + 1
+                last_col_letter = openpyxl.utils.get_column_letter(len(headers))
+                ws.merge_cells(start_row=insert_row, start_column=1, end_row=insert_row, end_column=len(headers))
+                cell = ws.cell(row=insert_row, column=1)
+                cell.value = (city or '').upper() if city else ''
+                from openpyxl.styles import PatternFill, Font, Alignment
+                cell.fill = PatternFill(start_color='1F4E78', end_color='1F4E78', fill_type='solid')
+                cell.font = Font(color='FFFFFF', bold=True)
+                cell.alignment = Alignment(horizontal='center')
+
+                # Hide email 2/3 columns to avoid taking screen space
+                try:
+                    col_idx_email2 = headers.index('Adres E-mail 2') + 1
+                    col_idx_email3 = headers.index('Adres E-mail 3') + 1
+                    col_letter_2 = openpyxl.utils.get_column_letter(col_idx_email2)
+                    col_letter_3 = openpyxl.utils.get_column_letter(col_idx_email3)
+                    ws.column_dimensions[col_letter_2].hidden = True
+                    ws.column_dimensions[col_letter_3].hidden = True
+                    ws.column_dimensions[col_letter_2].width = 0
+                    ws.column_dimensions[col_letter_3].width = 0
+                except Exception:
+                    pass
+
+# Now append each record with mapping to headers
+            for item in data:
+                emails = item.get('emails', []) or []
+                sources = item.get('sources') or []
+                name_val = item.get('name', '')
+                addr_val = item.get('formatted_address', '')
+                phone_val = item.get('formatted_phone_number', '')
+
+                # Main email cell: include primary and additional emails concatenated so they are visible in one cell
+                main_email = ''
+                if emails:
+                    main_email = emails[0]
+                    if len(emails) > 1:
+                        additional = ', '.join(emails[1:3])
+                        main_email = f"{main_email} ({additional})"
+                # Other Emails column will contain any remaining beyond 3
+                other_emails = ', '.join(emails[3:]) if len(emails) > 3 else ''
+
+                row_vals = []
+                for h in headers:
+                    key = (h or '').strip().lower()
+                    if key in ('nazwa salonu', 'name'):
+                        row_vals.append(name_val)
+                    elif key in ('adres', 'address'):
+                        row_vals.append(addr_val)
+                    elif key in ('numer telefonu', 'phone', 'numer telefonu (bez spacji)'):
+                        row_vals.append(phone_val)
+                    elif key in ('adres e-mail', 'adres e-mail 1', 'email 1'):
+                        row_vals.append(main_email)
+                    elif key == 'adres e-mail 2':
+                        row_vals.append(emails[1] if len(emails) > 1 else '')
+                    elif key == 'adres e-mail 3':
+                        row_vals.append(emails[2] if len(emails) > 2 else '')
+                    elif key == 'status':
+                        row_vals.append('to call')
+                    elif key == 'data kontaktu':
+                        row_vals.append('')
+                    elif key == 'other emails':
+                        row_vals.append(other_emails)
+                    elif key == 'sources':
+                        row_vals.append(', '.join(sources))
+                    else:
+                        # Unknown column from template: leave empty
+                        row_vals.append('')
+
+                ws.append(row_vals)
+
+            # Save workbook back to template path
+            wb.save(template_path)
+            logger.info("Appended %s records to %s", len(data), template_path)
+            return
+
+        # Fallback behaviour: create a new workbook (previous behaviour)
         wb = openpyxl.Workbook()
         ws = wb.active
-        
-        # Headers with three separate columns for email addresses
-        ws.append(['Name', 'Address', 'Phone', 'Website', 'Email 1', 'Email 2', 'Email 3', 'Other Emails'])
-        
+
+        # Fallback headers (Polish names matching template intent)
+        headers = ['Nazwa Salonu', 'Adres', 'Numer Telefonu', 'Adres E-mail', 'Adres E-mail 2', 'Adres E-mail 3', 'Other Emails', 'Sources']
+        ws.append(headers)
+
         for item in data:
-            # Get the list of emails
-            emails = item.get('emails', [])
-            
-            # Prepare list of values to add to the row
-            row_data = [
+            emails = item.get('emails', []) or []
+            sources = item.get('sources') or []
+            row = [
                 item.get('name', ''),
                 item.get('formatted_address', ''),
                 item.get('formatted_phone_number', ''),
-                item.get('website', '')
+                emails[0] if len(emails) > 0 else '',
+                emails[1] if len(emails) > 1 else '',
+                emails[2] if len(emails) > 2 else '',
+                ', '.join(emails[3:]) if len(emails) > 3 else '',
+                ', '.join(sources)
             ]
-            
-            # Add the first three emails in separate columns
-            for i in range(3):
-                if i < len(emails):
-                    row_data.append(emails[i])
-                else:
-                    row_data.append('')  # Empty column if no email
-            
-            # Add remaining emails in the last column, comma-separated
-            if len(emails) > 3:
-                row_data.append(', '.join(emails[3:]))
-            else:
-                row_data.append('')
-                
-            ws.append(row_data)
+            ws.append(row)
+
+        wb.save(filename)
+        logger.info("Saved %s records to %s", len(data), filename)
             
         # Adjust column widths
         for column_cells in ws.columns: # Changed 'column' to 'column_cells' for clarity
@@ -2143,7 +2583,7 @@ def save_to_csv(data, filename):
     try:
         with open(filename, mode='w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
-            writer.writerow(['Name', 'Address', 'Phone', 'Website', 'Email 1', 'Email 2', 'Email 3', 'Other Emails'])
+            writer.writerow(['Name', 'Address', 'Phone', 'Website', 'Email 1', 'Email 2', 'Email 3', 'Other Emails', 'Sources'])
             for item in data:
                 emails = item.get('emails', [])
                 row_data = [
@@ -2155,6 +2595,8 @@ def save_to_csv(data, filename):
                 for i in range(3):
                     row_data.append(emails[i] if i < len(emails) else '')
                 row_data.append(', '.join(emails[3:]) if len(emails) > 3 else '')
+                sources = item.get('sources') or []
+                row_data.append(', '.join(sources))
                 writer.writerow(row_data)
         logger.info("Saved %s records to %s", len(data), filename)
     except Exception as e:
@@ -2170,10 +2612,10 @@ def save_to_json(data, filename):
         logger.error("Error saving to JSON: %s", e)
 
 
-def save_results(data, output_file, output_format):
+def save_results(data, output_file, output_format, city=None, append_to_template=False):
     output_format = (output_format or 'xlsx').lower()
     if output_format == 'xlsx':
-        save_to_excel(data, output_file)
+        save_to_excel(data, output_file, city=city, append=append_to_template)
     elif output_format == 'csv':
         save_to_csv(data, output_file if output_file.endswith('.csv') else f"{os.path.splitext(output_file)[0]}.csv")
     elif output_format == 'json':
@@ -2369,7 +2811,26 @@ def main():
         output_path = ensure_output_path(chosen_name, args.format)
     else:
         output_path = ensure_output_path(args.output, args.format)
-    output_path = resolve_existing_output(output_path, args.format)
+
+    # If the chosen output is the standard template, ask whether to append to it
+    template_path = os.path.join('scraped', 'IdeaMusicLeads.xlsx')
+    append_to_template = False
+
+    if os.path.exists(template_path) and os.path.abspath(output_path) == os.path.abspath(template_path):
+        ans = input(f"Plik {template_path} już istnieje. Dopisać do niego? (t/n): ").strip().lower()
+        if ans == 't':
+            append_to_template = True
+        else:
+            # Ask for alternative filename
+            new_name = input("Podaj nazwę pliku do zapisu (bez rozszerzenia, pusty = anuluj): ").strip()
+            if new_name:
+                output_path = ensure_output_path(new_name, args.format)
+            else:
+                print("Anulowano zapis do szablonu. Kontynuuję; podaj inną nazwę przy ponownym uruchomieniu.")
+                # keep output_path as originally provided (will trigger overwrite prompt)
+
+    if not append_to_template:
+        output_path = resolve_existing_output(output_path, args.format)
 
     setup_run_logging(output_path)
     use_google_choice = True
@@ -2399,20 +2860,24 @@ def main():
     # Fetch data from Panorama Firm (always)
     logger.info("=== Fetching data from Panorama Firm ===")
     all_panorama_results = scrape_panorama_firm(normalized_query, location, max_pages=args.max_pages, session=session)
+    annotate_sources(all_panorama_results, 'panoramafirm')
     
     # Fetch data from PKT.pl (always)
     logger.info("=== Fetching data from PKT.pl ===")
     all_pkt_results = scrape_pkt_pl(normalized_query, location, max_pages=args.max_pages, session=session)
+    annotate_sources(all_pkt_results, 'pkt')
 
     # Fetch data from Booksy (optional)
     if use_booksy_choice:
         logger.info("=== Fetching data from Booksy ===")
         all_booksy_results = scrape_booksy(normalized_query, location, max_pages=args.max_pages, session=session)
+        annotate_sources(all_booksy_results, 'booksy')
 
     # Fetch data from SPAeden rankings (always for spa/wellness/massage)
     if map_query_to_category(normalized_query) in ("spa", "wellness", "masaz"):
         logger.info("=== Fetching data from SPAeden rankings ===")
         all_spaeden_results = scrape_spaeden_rankings(session=session)
+        annotate_sources(all_spaeden_results, 'spaeden')
 
     # Fetch data from Fresha (always)
     logger.info("=== Fetching data from Fresha ===")
@@ -2424,10 +2889,12 @@ def main():
         use_headless=args.use_headless,
         headless_wait=args.headless_wait
     )
+    annotate_sources(all_fresha_results, 'fresha')
 
     # Fetch data from Moment.pl (Booksy mirror)
     logger.info("=== Fetching data from Moment.pl ===")
     all_moment_results = scrape_moment(normalized_query, location, session=session, max_pages=args.max_pages)
+    annotate_sources(all_moment_results, 'moment')
 
     # Fetch data from Cylex
     logger.info("=== Fetching data from Cylex ===")
@@ -2439,10 +2906,12 @@ def main():
         use_headless=args.use_headless,
         headless_wait=args.headless_wait
     )
+    annotate_sources(all_cylex_results, 'cylex')
 
     # Fetch data from Oferteo
     logger.info("=== Fetching data from Oferteo ===")
     all_oferteo_results = scrape_oferteo(normalized_query, location, session=session, max_pages=args.max_pages)
+    annotate_sources(all_oferteo_results, 'oferteo')
 
     # Fetch data from Firmy.net
     logger.info("=== Fetching data from Firmy.net ===")
@@ -2454,6 +2923,7 @@ def main():
         use_headless=args.use_headless,
         headless_wait=args.headless_wait
     )
+    annotate_sources(all_firmynet_results, 'firmynet')
 
     # Fetch data from BiznesFinder
     logger.info("=== Fetching data from BiznesFinder ===")
@@ -2465,11 +2935,13 @@ def main():
         use_headless=args.use_headless,
         headless_wait=args.headless_wait
     )
+    annotate_sources(all_biznesfinder_results, 'biznesfinder')
 
     # Fetch data from ZnanyLekarz (only relevant for massage/physio)
     if map_query_to_category(normalized_query) in ("masaz", "fizjoterapia"):
         logger.info("=== Fetching data from ZnanyLekarz ===")
         all_znanylekarz_results = scrape_znanylekarz(normalized_query, location, session=session, max_pages=args.max_pages)
+        annotate_sources(all_znanylekarz_results, 'znanylekarz')
 
     # Fetch data from Fixly (best-effort, JS-rendered)
     logger.info("=== Fetching data from Fixly ===")
@@ -2481,6 +2953,7 @@ def main():
         use_headless=args.use_headless,
         headless_wait=args.headless_wait
     )
+    annotate_sources(all_fixly_results, 'fixly')
     
     # Fetch data from Google Places (optional)
     if use_google_choice and API_KEY:
@@ -2523,28 +2996,31 @@ def main():
         except Exception as e:
             logger.error("Error fetching data from Google Places: %s", e)
     
+    # Ensure Google results are annotated
+    annotate_sources(all_google_details, 'google')
+
     # Merge all results
     all_results = merge_results(all_google_details, all_panorama_results, all_pkt_results)
     if all_booksy_results:
-        all_results = merge_results(all_results, all_booksy_results, [])
+        all_results = merge_results(all_results, all_booksy_results)
     if all_spaeden_results:
-        all_results = merge_results(all_results, all_spaeden_results, [])
+        all_results = merge_results(all_results, all_spaeden_results)
     if all_fresha_results:
-        all_results = merge_results(all_results, all_fresha_results, [])
+        all_results = merge_results(all_results, all_fresha_results)
     if all_moment_results:
-        all_results = merge_results(all_results, all_moment_results, [])
+        all_results = merge_results(all_results, all_moment_results)
     if all_cylex_results:
-        all_results = merge_results(all_results, all_cylex_results, [])
+        all_results = merge_results(all_results, all_cylex_results)
     if all_oferteo_results:
-        all_results = merge_results(all_results, all_oferteo_results, [])
+        all_results = merge_results(all_results, all_oferteo_results)
     if all_firmynet_results:
-        all_results = merge_results(all_results, all_firmynet_results, [])
+        all_results = merge_results(all_results, all_firmynet_results)
     if all_biznesfinder_results:
-        all_results = merge_results(all_results, all_biznesfinder_results, [])
+        all_results = merge_results(all_results, all_biznesfinder_results)
     if all_znanylekarz_results:
-        all_results = merge_results(all_results, all_znanylekarz_results, [])
+        all_results = merge_results(all_results, all_znanylekarz_results)
     if all_fixly_results:
-        all_results = merge_results(all_results, all_fixly_results, [])
+        all_results = merge_results(all_results, all_fixly_results)
     logger.info("After deduplication, we have %s unique businesses.", len(all_results))
     
     # If user wants emails, fetch them for each business with a website URL
@@ -2602,7 +3078,7 @@ def main():
     
     # Save all data to Excel file
     if all_results:
-        save_results(all_results, output_path, args.format)
+        save_results(all_results, output_path, args.format, city=location, append_to_template=append_to_template)
     else:
         logger.info("No data to save.")
 

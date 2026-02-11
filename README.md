@@ -114,6 +114,38 @@ This tool is intended to help streamline lead generation and market research by 
 6.  The script will print progress updates to the console.
 7.  Once completed, the results will be saved in the chosen format (default: `results.xlsx`) in the project directory.
 
+### Running with .venv (Windows)
+
+On Windows it's recommended to use the bundled virtual environment so the script uses the correct Python and installed packages.
+
+PowerShell (recommended):
+```powershell
+# create venv if missing
+python -m venv .venv
+# activate
+& .\.venv\Scripts\Activate.ps1
+# install deps (first run)
+pip install -r requirements.txt
+# run (the script will prompt if saving to the template file)
+python scraper.py --output scraped/IdeaMusicLeads.xlsx
+```
+
+CMD:
+```cmd
+.venv\Scripts\activate.bat
+python scraper.py --output scraped/IdeaMusicLeads.xlsx
+```
+
+You can also simply launch the helper batch file which prefers the `.venv` Python if available:
+```cmd
+.\run_scraper.bat
+```
+
+Note: if the output file is `scraped/IdeaMusicLeads.xlsx` and it already exists, the script will ask:
+`Plik scraped\IdeaMusicLeads.xlsx już istnieje. Dopisać do niego? (t/n):`
+- answer `t` to merge/append into the template (updates existing rows and adds new ones);
+- answer `n` to be prompted for a new filename and create a separate file.
+
 ### CLI Flags (Optional)
 
 You can also run the script non-interactively with CLI flags:

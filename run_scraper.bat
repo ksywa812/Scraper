@@ -1,9 +1,15 @@
 @echo off
-REM Przechodzimy do folderu, w którym le¿y ten plik .bat
+REM Przechodzimy do folderu, w ktÃ³rym leÅ¼y ten plik .bat
 cd /d "%~dp0"
-REM Uruchamiamy Twój scraper przez Pythona
-py scraper.py
-REM Nie zamykamy od razu okna, czekamy na naciœniêcie klawisza
+REM Uruchamiamy TwÃ³j scraper przez Pythona i domyÅ›lnie zapisujemy do IdeaMusicLeads.xlsx
+REM Use python from .venv if available, otherwise fall back to system 'py'
+set "VENV_PY=%~dp0.venv\Scripts\python.exe"
+if exist "%VENV_PY%" (
+    "%VENV_PY%" scraper.py --output scraped/IdeaMusicLeads.xlsx
+) else (
+    py scraper.py --output scraped/IdeaMusicLeads.xlsx
+)
+REM Nie zamykamy od razu okna, czekamy na naciÅ›niÄ™cie klawisza
 echo.
 echo Press any key to exit...
 pause >nul
