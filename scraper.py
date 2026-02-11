@@ -795,6 +795,114 @@ def extract_fresha_name_address(container):
     return name, address
 
 
+from urllib.robotparser import RobotFileParser
+
+# Cache robots parser per host
+_ROBOTS_CACHE = {}
+
+FRESHA_SITEMAPS = [
+    "https://www.fresha.com/sitemap.xml",
+    "https://www.fresha.com/lp/en/sitemap-landing-pages.xml",
+    "https://www.fresha.com/lp/en/sitemap-lite-venue-pages.xml",
+    "https://sitemaps.fresha.com/www/sitemap-salons.xml",
+]
+
+
+def _get_robots_parser(base_url, session=None):
+    # Return a RobotFileParser for base_url, cached
+    if base_url in _ROBOTS_CACHE:
+        return _ROBOTS_CACHE[base_url]
+    parser = RobotFileParser()
+    robots_url = f"{base_url.rstrip('/')}/robots.txt"
+    try:
+        if session is None:
+            import requests
+            r = requests.get(robots_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+            if r.status_code == 200:
+                parser.parse(r.text.splitlines())
+            else:
+                parser.read()  # fallback to default (may raise)
+        else:
+            r = session.get(robots_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+            if r.status_code == 200:
+                parser.parse(r.text.splitlines())
+            else:
+                parser.read()
+    except Exception:
+        try:
+            parser.read()
+        except Exception:
+            pass
+    _ROBOTS_CACHE[base_url] = parser
+    return parser
+
+
+def _fetch_sitemap_urls(session, location=None):
+    """Fetch Fresha sitemaps and return a list of candidate URLs. Filters by location if provided."""
+    urls = []
+    for sitemap in FRESHA_SITEMAPS:
+        try:
+            r = session.get(sitemap, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
+            if r.status_code != 200:
+                logger.debug("Fresha sitemap fetch returned %s for %s", r.status_code, sitemap)
+                continue
+            # naive XML parse for <loc>
+            import re
+            found = re.findall(r"<loc>(.*?)</loc>", r.text)
+            for loc in found:
+                loc = loc.strip()
+                if not loc:
+                    continue
+                if location:
+                    if location.lower() in loc.lower() or f"/pl-" in loc or "/pl/" in loc:
+                        urls.append(loc)
+                else:
+                    urls.append(loc)
+        except Exception as e:
+            logger.debug("Fresha: error fetching sitemap %s: %s", sitemap, e)
+    # dedupe preserving order
+    seen = set(); out = []
+    for u in urls:
+        if u not in seen:
+            seen.add(u); out.append(u)
+    return out
+
+
+def _fetch_with_retries(session, url, max_retries=3, backoff=1.0):
+    """Fetch url with retries for 5xx responses; returns (response or None, status, allowed)"""
+    parsed = requests.utils.urlparse(url)
+    base = f"{parsed.scheme}://{parsed.netloc}"
+    robots = _get_robots_parser(base, session=session)
+    allowed = robots.can_fetch("*", url)
+    if not allowed:
+        logger.info("Fresha: disallowed by robots.txt: %s", url)
+        return None, None, False
+
+    attempt = 0
+    while attempt < max_retries:
+        try:
+            r = session.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
+            logger.debug("Fresha fetch %s -> %s", url, r.status_code)
+            if r.status_code == 200:
+                return r, 200, True
+            if r.status_code in (403, 404):
+                logger.warning("Fresha: %s for %s", r.status_code, url)
+                return r, r.status_code, True
+            if 500 <= r.status_code < 600:
+                # retry with backoff
+                attempt += 1
+                time.sleep(backoff * (2 ** (attempt - 1)))
+                continue
+            # other statuses: return as-is
+            return r, r.status_code, True
+        except requests.RequestException as e:
+            logger.warning("Fresha: request error for %s: %s", url, e)
+            attempt += 1
+            time.sleep(backoff * (2 ** (attempt - 1)))
+    logger.warning("Fresha: failed to fetch after retries: %s", url)
+    return None, None, True
+
+
 def scrape_fresha(query, location, session=None, max_pages=3, use_headless=False, headless_wait=3):
     results = []
     session = session or create_session()
@@ -844,17 +952,43 @@ def scrape_fresha(query, location, session=None, max_pages=3, use_headless=False
         return page_added
 
     seen = set()
-    for base_url in base_urls:
-        total_added_for_base = 0
-        for page in range(1, max_pages + 1):
-            url = base_url if page == 1 else f"{base_url}?page={page}"
-            try:
-                resp = session.get(url, headers={'User-Agent': get_random_user_agent()}, timeout=20)
-                if resp.status_code == 404:
-                    logger.warning("Fresha: 404 for %s", url)
+
+    # Prefer sitemap-driven discovery
+    sitemap_urls = _fetch_sitemap_urls(session, location=location)
+    if sitemap_urls:
+        logger.info("Fresha: discovered %s candidate URLs from sitemaps", len(sitemap_urls))
+        for url in sitemap_urls:
+            r, status, allowed = _fetch_with_retries(session, url)
+            logger.info("Fresha fetch: url=%s status=%s allowed=%s", url, status, allowed)
+            if not allowed:
+                continue
+            if r is None or status in (403, 404):
+                continue
+            html = r.text
+            page_added = parse_fresha_html(html, seen)
+            # if nothing added and headless is allowed, try rendering
+            if page_added == 0 and use_headless:
+                rendered = get_rendered_html(url, wait_seconds=headless_wait, timeout=25)
+                if rendered:
+                    page_added = parse_fresha_html(rendered, seen)
+            logger.info("Fresha: extracted %s listings from %s", page_added, url)
+            time.sleep(random.uniform(0.5, 1.5))
+    else:
+        # Fallback to previous search-based approach, but respect robots and headers
+        logger.info("Fresha: no sitemaps found or empty; falling back to search pages")
+        for base_url in base_urls:
+            total_added_for_base = 0
+            for page in range(1, max_pages + 1):
+                url = base_url if page == 1 else f"{base_url}?page={page}"
+                r, status, allowed = _fetch_with_retries(session, url)
+                logger.info("Fresha fetch: url=%s status=%s allowed=%s", url, status, allowed)
+                if not allowed:
                     break
-                resp.raise_for_status()
-                page_added = parse_fresha_html(resp.text, seen)
+                if r is None:
+                    break
+                if status in (403, 404):
+                    break
+                page_added = parse_fresha_html(r.text, seen)
                 if page_added == 0 and use_headless:
                     rendered = get_rendered_html(url, wait_seconds=headless_wait, timeout=25)
                     if rendered:
@@ -864,12 +998,10 @@ def scrape_fresha(query, location, session=None, max_pages=3, use_headless=False
                 if page_added == 0:
                     break
                 time.sleep(random.uniform(1.0, 2.0))
-            except Exception as e:
-                logger.warning("Fresha: error fetching %s: %s", url, e)
-                break
 
-        if total_added_for_base > 0:
-            break
+            # If we added results for this base_url, stop checking other base URLs
+            if total_added_for_base > 0:
+                break
 
     return results
 
@@ -2141,6 +2273,31 @@ def save_to_excel(data, filename=OUTPUT_FILE, city=None, append=False):
         template_path = os.path.join('scraped', 'IdeaMusicLeads.xlsx')
         target_basename = os.path.basename(filename or '')
 
+        # Validate provided filename. If invalid, fallback to template (if exists) or
+        # a safe default in the scraped folder to avoid writing to root like "\\.xlsx".
+        try:
+            bad_name = False
+            if not filename or not isinstance(filename, str):
+                bad_name = True
+            else:
+                base = os.path.basename(filename)
+                root, ext = os.path.splitext(base)
+                # Treat empty root (eg. ".xlsx"), only extension, or '.' as invalid
+                if not root or root.strip() == '' or root in ('.', '..'):
+                    bad_name = True
+            if bad_name:
+                if os.path.exists(template_path):
+                    filename = template_path
+                else:
+                    os.makedirs('scraped', exist_ok=True)
+                    filename = os.path.join('scraped', 'results.xlsx')
+                logger.warning("Invalid output filename provided; using fallback: %s", filename)
+        except Exception:
+            # If validation itself fails for any reason, ensure a safe fallback
+            os.makedirs('scraped', exist_ok=True)
+            filename = os.path.join('scraped', 'results.xlsx')
+            logger.warning("Error validating output filename; using fallback: %s", filename)
+
         # If we're updating the live IdeaMusicLeads.xlsx, open and append
         if os.path.exists(template_path) and target_basename.lower() == os.path.basename(template_path).lower():
             wb = openpyxl.load_workbook(template_path)
@@ -2364,22 +2521,89 @@ def save_to_excel(data, filename=OUTPUT_FILE, city=None, append=False):
                         if next_header_row:
                             insert_row = next_header_row
                         else:
-                            insert_row = ws.max_row + 1
+                            # Find the end of this city's block by scanning downward from the header
+                            def _is_non_empty(cell):
+                                v = cell.value
+                                if v is None:
+                                    return False
+                                if isinstance(v, str) and v.strip() == '':
+                                    return False
+                                return True
+
+                            def _looks_like_header(val):
+                                if not val:
+                                    return False
+                                s = str(val).strip()
+                                if s.startswith('!'):
+                                    s2 = s[1:]
+                                else:
+                                    s2 = s
+                                # heuristic: short, all-caps, no commas, no digits
+                                if len(s2.split()) <= 6 and s2 == s2.upper() and (',' not in s2) and not any(c.isdigit() for c in s2):
+                                    return True
+                                return False
+
+                            # Walk forward from header until we find the first empty row (end of this city's contiguous block)
+                            last_seen = city_header_row
+                            for r in range(city_header_row + 1, ws.max_row + 1):
+                                has_any = False
+                                for c in range(1, len(headers) + 1):
+                                    if _is_non_empty(ws.cell(row=r, column=c)):
+                                        has_any = True
+                                        break
+                                if has_any:
+                                    last_seen = r
+                                    continue
+                                # first fully-empty row after the block -> insert here
+                                insert_row = r
+                                break
+                            else:
+                                # no empty row found, append after last seen
+                                insert_row = last_seen + 1
 
                     else:
-                        # No existing city header: insert after last non-empty row
-                        last_non_empty = 1
-                        for r in range(ws.max_row, 1, -1):
-                            has_any = False
+                        # No existing city header: find the first visible gap near the top (3 consecutive empty rows) and insert there; fallback to last non-empty row
+                        def _is_non_empty(cell):
+                            v = cell.value
+                            if v is None:
+                                return False
+                            if isinstance(v, str) and v.strip() == '':
+                                return False
+                            return True
+
+                        def _row_has_data(r):
                             for c in range(1, len(headers) + 1):
-                                if ws.cell(row=r, column=c).value not in (None, ''):
-                                    has_any = True
+                                if _is_non_empty(ws.cell(row=r, column=c)):
+                                    return True
+                            return False
+
+                        gap_row = None
+                        consec_needed = 1  # treat 1 empty row as end-of-block
+                        for r in range(2, max(2, ws.max_row - consec_needed)):
+                            empty_run = True
+                            for k in range(consec_needed):
+                                if r + k > ws.max_row:
+                                    empty_run = False
                                     break
-                            if has_any:
-                                last_non_empty = r
+                                if _row_has_data(r + k):
+                                    empty_run = False
+                                    break
+                            if empty_run:
+                                gap_row = r
                                 break
 
-                        insert_row = last_non_empty + 1
+                        if gap_row:
+                            insert_row = gap_row
+                            logger.info("Fresha: inserting city header '%s' at first visible gap row %s", city_name, insert_row)
+                        else:
+                            last_non_empty = 1
+                            for r in range(ws.max_row, 1, -1):
+                                if _row_has_data(r):
+                                    last_non_empty = r
+                                    break
+                            insert_row = last_non_empty + 1
+                            logger.info("Fresha: inserting city header '%s' at end row %s (no early gap found)", city_name, insert_row)
+
                         # Insert city header with '!' prefix
                         ws.insert_rows(insert_row)
                         ws.merge_cells(start_row=insert_row, start_column=1, end_row=insert_row, end_column=len(headers))
@@ -2433,21 +2657,28 @@ def save_to_excel(data, filename=OUTPUT_FILE, city=None, append=False):
                         for ci, v in enumerate(row_vals, start=1):
                             ws.cell(row=insert_row + idx, column=ci).value = v
 
-                    # Hide email 2/3 columns
+                    # Ensure email 2/3 columns (E and F) are visible
                     try:
                         col_idx_email2 = headers.index('Adres E-mail 2') + 1
                         col_idx_email3 = headers.index('Adres E-mail 3') + 1
                         col_letter_2 = openpyxl.utils.get_column_letter(col_idx_email2)
                         col_letter_3 = openpyxl.utils.get_column_letter(col_idx_email3)
-                        ws.column_dimensions[col_letter_2].hidden = True
-                        ws.column_dimensions[col_letter_3].hidden = True
-                        ws.column_dimensions[col_letter_2].width = 0
-                        ws.column_dimensions[col_letter_3].width = 0
+                        # Unhide columns (in case template had them hidden) and ensure sensible width
+                        ws.column_dimensions[col_letter_2].hidden = False
+                        ws.column_dimensions[col_letter_3].hidden = False
+                        if getattr(ws.column_dimensions[col_letter_2], 'width', None) == 0:
+                            ws.column_dimensions[col_letter_2].width = 20
+                        if getattr(ws.column_dimensions[col_letter_3], 'width', None) == 0:
+                            ws.column_dimensions[col_letter_3].width = 20
                     except Exception:
                         pass
 
                 # Save and finish merge/append (avoid appending all items again)
                 appended_count = len(to_append)
+                if appended_count:
+                    logger.info("Inserted %s rows starting at row %s for city %s", appended_count, insert_row, city_name)
+                else:
+                    logger.info("No rows appended for city %s", city_name)
                 wb.save(template_path)
                 logger.info("Updated %s existing rows and appended %s new records to %s", updated_count, appended_count, template_path)
                 return
@@ -2463,16 +2694,19 @@ def save_to_excel(data, filename=OUTPUT_FILE, city=None, append=False):
                 cell.font = Font(color='FFFFFF', bold=True)
                 cell.alignment = Alignment(horizontal='center')
 
-                # Hide email 2/3 columns to avoid taking screen space
+                # Ensure email 2/3 columns (E and F) are visible
                 try:
                     col_idx_email2 = headers.index('Adres E-mail 2') + 1
                     col_idx_email3 = headers.index('Adres E-mail 3') + 1
                     col_letter_2 = openpyxl.utils.get_column_letter(col_idx_email2)
                     col_letter_3 = openpyxl.utils.get_column_letter(col_idx_email3)
-                    ws.column_dimensions[col_letter_2].hidden = True
-                    ws.column_dimensions[col_letter_3].hidden = True
-                    ws.column_dimensions[col_letter_2].width = 0
-                    ws.column_dimensions[col_letter_3].width = 0
+                    # Unhide columns (in case template had them hidden) and ensure sensible width
+                    ws.column_dimensions[col_letter_2].hidden = False
+                    ws.column_dimensions[col_letter_3].hidden = False
+                    if getattr(ws.column_dimensions[col_letter_2], 'width', None) == 0:
+                        ws.column_dimensions[col_letter_2].width = 20
+                    if getattr(ws.column_dimensions[col_letter_3], 'width', None) == 0:
+                        ws.column_dimensions[col_letter_3].width = 20
                 except Exception:
                     pass
 
@@ -2570,7 +2804,21 @@ def save_to_excel(data, filename=OUTPUT_FILE, city=None, append=False):
         wb.save(filename)
         logger.info("Saved %s records to %s", len(data), filename)
     except Exception as e:
-        logger.error("Error saving to Excel: %s", e)
+        try:
+            logger.error("Error saving to Excel (attempted file: %s): %s", filename, e)
+        except Exception:
+            logger.error("Error saving to Excel: %s", e)
+        # Try to save to a safe fallback (template if available, otherwise scraped/results.xlsx)
+        try:
+            fallback = template_path if os.path.exists(template_path) else os.path.join('scraped', 'results.xlsx')
+            os.makedirs(os.path.dirname(fallback), exist_ok=True)
+            if 'wb' in locals():
+                wb.save(fallback)
+                logger.info("Workbook saved to fallback location: %s", fallback)
+            else:
+                logger.error("No workbook object available to save to fallback location: %s", fallback)
+        except Exception as e2:
+            logger.error("Fallback save also failed: %s", e2)
 
 
 def save_to_csv(data, filename):
