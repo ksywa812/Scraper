@@ -58,6 +58,7 @@ env/
 *.db
 .env
 .env.*
+!.env.example
 
 # -----------------------------
 # IDE / OS files

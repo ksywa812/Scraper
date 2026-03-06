@@ -2600,6 +2600,110 @@ def search_next_page(next_page_token, session=None):
         logger.error("Error fetching next page: %s", e)
         return [], None
 
+_CITY_COORDS = {
+    "wrocław": (51.1079, 17.0385), "warszawa": (52.2297, 21.0122),
+    "kraków": (50.0647, 19.9450), "poznań": (52.4064, 16.9252),
+    "gdańsk": (54.3520, 18.6466), "gdynia": (54.5189, 18.5305),
+    "sopot": (54.4416, 18.5601), "łódź": (51.7592, 19.4560),
+    "katowice": (50.2649, 19.0238), "bielsko-biała": (49.8225, 19.0444),
+    "częstochowa": (50.8118, 19.1203), "gliwice": (50.2945, 18.6714),
+    "zabrze": (50.3249, 18.7857), "bytom": (50.3481, 18.9320),
+    "rybnik": (50.0971, 18.5430), "tychy": (50.1357, 18.9968),
+    "sosnowiec": (50.2863, 19.1041), "chorzów": (50.2976, 18.9540),
+    "dąbrowa górnicza": (50.3248, 19.1993), "szczecin": (53.4285, 14.5528),
+    "bydgoszcz": (53.1235, 18.0084), "lublin": (51.2465, 22.5684),
+    "białystok": (53.1325, 23.1688), "rzeszów": (50.0412, 21.9991),
+    "kielce": (50.8661, 20.6286), "olsztyn": (53.7784, 20.4801),
+    "toruń": (53.0138, 18.5981), "radom": (51.4027, 21.1471),
+    "opole": (50.6751, 17.9213), "zielona góra": (51.9356, 15.5062),
+    "tarnów": (50.0121, 20.9858), "koszalin": (54.1943, 16.1716),
+    "legnica": (51.2070, 16.1619), "wałbrzych": (50.7714, 16.2843),
+    "jelenia góra": (50.9044, 15.7197), "lubin": (51.4010, 16.1996),
+    "głogów": (51.6656, 16.0843), "świdnica": (50.8448, 16.4875),
+    "włocławek": (52.6484, 19.0677), "grudziądz": (53.4837, 18.7536),
+    "inowrocław": (52.7980, 18.2585), "zamość": (50.7230, 23.2520),
+    "chełm": (51.1432, 23.4716), "biała podlaska": (52.0318, 23.1160),
+    "gorzów wielkopolski": (52.7325, 15.2369), "nowa sól": (51.8020, 15.7201),
+    "piotrków trybunalski": (51.4058, 19.7030), "pabianice": (51.6640, 19.3540),
+    "tomaszów mazowiecki": (51.5253, 20.0111), "bełchatów": (51.3618, 19.3596),
+    "nowy sącz": (49.6237, 20.6926), "oświęcim": (50.0344, 19.2044),
+    "chrzanów": (50.1332, 19.4027), "płock": (52.5463, 19.7065),
+    "siedlce": (52.1676, 22.2903), "pruszków": (52.1701, 20.7990),
+    "legionowo": (52.4046, 20.9385), "kędzierzyn-koźle": (50.3481, 18.2198),
+    "nysa": (50.4748, 17.3328), "przemyśl": (49.7838, 22.7677),
+    "stalowa wola": (50.5825, 22.0524), "mielec": (50.2887, 21.4215),
+    "suwałki": (54.1115, 22.9306), "łomża": (53.1782, 22.0591),
+    "słupsk": (54.4641, 17.0286), "tczew": (53.7771, 18.7794),
+    "wejherowo": (54.6059, 18.2344), "kalisz": (51.7611, 18.0910),
+    "konin": (52.2230, 18.2511), "piła": (53.1513, 16.7383),
+    "ostrów wielkopolski": (51.6500, 17.8167), "gniezno": (52.5354, 17.5986),
+    "stargard": (53.3353, 15.0491), "kołobrzeg": (54.1758, 15.5753),
+    "świnoujście": (53.9108, 14.2439), "elbląg": (54.1560, 19.4044),
+    "ełk": (53.8284, 22.3571), "ostrowiec świętokrzyski": (50.9300, 21.3842),
+    "starachowice": (51.0384, 21.0692),
+}
+
+
+def get_city_coords(city, cache_conn=None, session=None):
+    """Return (lat, lng) for a city. Checks hardcoded dict first, then sqlite cache,
+    then falls back to Places findplacefromtext (no Geocoding API needed)."""
+    key = city.lower().strip()
+
+    # 1. Hardcoded dict — instant, no API
+    if key in _CITY_COORDS:
+        return _CITY_COORDS[key]
+
+    # 2. SQLite cache
+    if cache_conn:
+        try:
+            cache_conn.execute(
+                "CREATE TABLE IF NOT EXISTS geocode_cache "
+                "(city TEXT PRIMARY KEY, lat REAL, lng REAL)"
+            )
+            row = cache_conn.execute(
+                "SELECT lat, lng FROM geocode_cache WHERE city=?", (key,)
+            ).fetchone()
+            if row:
+                return (row[0], row[1])
+        except Exception:
+            pass
+
+    # 3. Places findplacefromtext as geocoder (uses already-enabled Places API)
+    if not API_KEY:
+        return None
+    session = session or create_session()
+    try:
+        url = 'https://maps.googleapis.com/maps/api/place/findplacefromtext/json'
+        params = {
+            'input': city,
+            'inputtype': 'textquery',
+            'fields': 'geometry',
+            'key': API_KEY,
+            'language': 'pl',
+        }
+        resp = session.get(url, params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get('status') == 'OK' and data.get('candidates'):
+            loc = data['candidates'][0].get('geometry', {}).get('location', {})
+            lat, lng = loc.get('lat'), loc.get('lng')
+            if lat and lng:
+                if cache_conn:
+                    try:
+                        cache_conn.execute(
+                            "INSERT OR REPLACE INTO geocode_cache (city, lat, lng) VALUES (?,?,?)",
+                            (key, lat, lng)
+                        )
+                        cache_conn.commit()
+                    except Exception:
+                        pass
+                return (lat, lng)
+    except Exception as e:
+        logger.warning("get_city_coords: failed for '%s': %s", city, e)
+
+    return None
+
+
 def get_place_details(place_id, session=None):
     """Fetches place details from Google Places API."""
     if not API_KEY:
@@ -2626,7 +2730,7 @@ def get_place_details(place_id, session=None):
         logger.error("Error fetching details for place %s: %s", place_id, e)
         return {}
 
-def enrich_with_google_places(results, location, session=None):
+def enrich_with_google_places(results, location, session=None, cache_conn=None):
     """For records missing phone (and optionally website), look them up via
     Google Places findplacefromtext → place/details and fill in the gaps.
 
@@ -2637,15 +2741,23 @@ def enrich_with_google_places(results, location, session=None):
         return
 
     session = session or create_session()
-    candidates = [
-        r for r in results
-        if not r.get('formatted_phone_number') and not r.get('website')
-    ]
+    # Enrich records missing website — website is the gateway to email scraping.
+    # Phone presence is irrelevant: a record can have phone but no website/email.
+    candidates = [r for r in results if not r.get('website')]
     if not candidates:
-        logger.info("Google enrichment: all records already have phone or website — skipping")
+        logger.info("Google enrichment: all records already have a website — skipping")
         return
 
-    logger.info("=== Google Places enrichment: %d records missing phone+website ===", len(candidates))
+    logger.info("=== Google Places enrichment: %d records missing website (seeking emails) ===", len(candidates))
+
+    # Resolve city GPS coords once (cached) for accurate locationbias
+    coords = get_city_coords(location, cache_conn=cache_conn, session=session)
+    if coords:
+        location_bias = f'circle:30000@{coords[0]},{coords[1]}'
+        logger.info("Google enrichment: locationbias set to %s", location_bias)
+    else:
+        location_bias = None
+        logger.warning("Google enrichment: could not resolve coords for '%s', locationbias disabled", location)
 
     enriched = 0
     for item in candidates:
@@ -2659,10 +2771,11 @@ def enrich_with_google_places(results, location, session=None):
                 'input': query_text,
                 'inputtype': 'textquery',
                 'fields': 'place_id,name',
-                'locationbias': f'circle:30000@{location}',
                 'key': API_KEY,
                 'language': 'pl',
             }
+            if location_bias:
+                params['locationbias'] = location_bias
             resp = session.get(url, params=params, timeout=10)
             resp.raise_for_status()
             data = resp.json()
@@ -2980,6 +3093,106 @@ def merge_results(*lists):
 
     return [merged[k] for k in insertion_order]
 
+def _rebuild_branza_sheets(wb, template_path):
+    """Sync per-branża sheets from the 'Wszystkie' master sheet.
+
+    Reads all data rows from 'Wszystkie', groups them by Branża, then
+    recreates each branża sheet with city-header rows (dark blue) and data rows.
+    Called after every save to IdeaMusicLeads.xlsx.
+    """
+    from collections import defaultdict
+    from openpyxl.styles import PatternFill, Font, Alignment
+
+    KNOWN_BRANZE = {
+        "spa": "Spa", "joga": "Joga", "fizjoterapia": "Fizjoterapia",
+        "uroda": "Uroda", "fryzjer": "Fryzjer", "hotel": "Hotel",
+        "restaurant": "Restaurant", "masaz": "Masaż", "masaż": "Masaż",
+    }
+
+    if 'Wszystkie' not in wb.sheetnames:
+        return
+
+    ws_all = wb['Wszystkie']
+    headers = [cell.value for cell in next(ws_all.iter_rows(min_row=1, max_row=1))]
+    while headers and headers[-1] is None:
+        headers.pop()
+
+    try:
+        branza_col_idx = headers.index('Branża')
+        miasto_col_idx = headers.index('Miasto')
+    except ValueError:
+        return  # columns not present yet
+
+    # Read all data rows; skip city-header rows (merged rows with ≤1 non-None cell)
+    data_rows = []
+    for row in ws_all.iter_rows(min_row=2, values_only=True):
+        row_list = list(row)[:len(headers)]
+        # Pad if shorter
+        while len(row_list) < len(headers):
+            row_list.append(None)
+        non_none = sum(1 for v in row_list if v is not None)
+        if non_none <= 1:
+            continue  # city header row
+        data_rows.append(row_list)
+
+    # Group by sheet name
+    branza_groups = defaultdict(list)
+    for row in data_rows:
+        raw = str(row[branza_col_idx] or '').lower().strip()
+        sheet_name = KNOWN_BRANZE.get(raw, 'Inne') if raw else 'Inne'
+        branza_groups[sheet_name].append(row)
+
+    header_fill = PatternFill(start_color='1F4E78', end_color='1F4E78', fill_type='solid')
+    header_font = Font(color='FFFFFF', bold=True)
+    header_align = Alignment(horizontal='center')
+
+    sheet_order = ['Spa', 'Joga', 'Fizjoterapia', 'Uroda', 'Fryzjer', 'Masaż', 'Hotel', 'Restaurant', 'Inne']
+
+    for sheet_name, rows in branza_groups.items():
+        # Remove existing sheet and recreate
+        if sheet_name in wb.sheetnames:
+            del wb[sheet_name]
+        ws = wb.create_sheet(sheet_name)
+
+        # Header row
+        ws.append(headers)
+
+        # Group rows by miasto, sort alphabetically
+        miasto_groups = defaultdict(list)
+        for row in rows:
+            miasto_val = str(row[miasto_col_idx] or '').upper().strip()
+            miasto_groups[miasto_val].append(row)
+
+        for miasto_name in sorted(miasto_groups):
+            # City header row
+            ws.append([f'!{miasto_name}'] + [None] * (len(headers) - 1))
+            city_row_idx = ws.max_row
+            ws.merge_cells(
+                start_row=city_row_idx, start_column=1,
+                end_row=city_row_idx, end_column=len(headers)
+            )
+            cell = ws.cell(row=city_row_idx, column=1)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = header_align
+
+            for row in miasto_groups[miasto_name]:
+                ws.append(row)
+
+    # Reorder sheets: Wszystkie first, then known branże in order, then Inne
+    desired = ['Wszystkie'] + [s for s in sheet_order if s in wb.sheetnames]
+    remaining = [s for s in wb.sheetnames if s not in desired]
+    final_order = desired + remaining
+    for target_idx, name in enumerate(final_order):
+        if name not in wb.sheetnames:
+            continue
+        current_idx = wb.sheetnames.index(name)
+        if current_idx != target_idx:
+            wb.move_sheet(name, offset=target_idx - current_idx)
+
+    wb.save(template_path)
+
+
 def save_to_excel(data, filename=OUTPUT_FILE, city=None, append=False):
     """Saves data to an Excel file. If target is the IdeaMusicLeads template, append into it
     and preserve layout/style, insert a colored city header row, set Status='to call', and
@@ -3017,7 +3230,16 @@ def save_to_excel(data, filename=OUTPUT_FILE, city=None, append=False):
         # If we're updating the live IdeaMusicLeads.xlsx, open and append
         if os.path.exists(template_path) and target_basename.lower() == os.path.basename(template_path).lower():
             wb = openpyxl.load_workbook(template_path)
-            ws = wb[wb.sheetnames[0]]
+
+            # Ensure main sheet is named "Wszystkie"
+            first_sheet = wb[wb.sheetnames[0]]
+            _branża_sheet_names = {'Spa', 'Joga', 'Fizjoterapia', 'Uroda', 'Fryzjer', 'Masaż', 'Hotel', 'Restaurant', 'Inne'}
+            if first_sheet.title not in ({'Wszystkie'} | _branża_sheet_names):
+                first_sheet.title = 'Wszystkie'
+            if 'Wszystkie' not in wb.sheetnames:
+                ws = wb.create_sheet('Wszystkie', 0)
+            else:
+                ws = wb['Wszystkie']
 
             # Read header row (assume row 1)
             headers = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1))]
@@ -3066,6 +3288,11 @@ def save_to_excel(data, filename=OUTPUT_FILE, city=None, append=False):
                 headers.append('Other Emails')
             if 'Sources' not in headers:
                 headers.append('Sources')
+
+            # Ensure metadata columns exist (appended after Sources for backward compat)
+            for _meta_col in ['Branża', 'Województwo', 'Miasto']:
+                if _meta_col not in headers:
+                    headers.append(_meta_col)
 
             # If actual sheet headings in file differ, ensure columns exist in sheet by adding empty cells
             existing_header_cells = list(ws.iter_rows(min_row=1, max_row=1, values_only=False))[0]
@@ -3366,6 +3593,12 @@ def save_to_excel(data, filename=OUTPUT_FILE, city=None, append=False):
                                 row_vals.append(other_emails)
                             elif key == 'sources':
                                 row_vals.append(', '.join(sources))
+                            elif key == 'branża':
+                                row_vals.append(item.get('branża', ''))
+                            elif key == 'województwo':
+                                row_vals.append(item.get('województwo', ''))
+                            elif key == 'miasto':
+                                row_vals.append(item.get('miasto', ''))
                             else:
                                 row_vals.append('')
 
@@ -3397,6 +3630,7 @@ def save_to_excel(data, filename=OUTPUT_FILE, city=None, append=False):
                     logger.info("No rows appended for city %s", city_name)
                 wb.save(template_path)
                 logger.info("Updated %s existing rows and appended %s new records to %s", updated_count, appended_count, template_path)
+                _rebuild_branza_sheets(wb, template_path)
                 return
             else:
                 # Insert city header row (one long colored row with white font)
@@ -3467,6 +3701,12 @@ def save_to_excel(data, filename=OUTPUT_FILE, city=None, append=False):
                         row_vals.append(other_emails)
                     elif key == 'sources':
                         row_vals.append(', '.join(sources))
+                    elif key == 'branża':
+                        row_vals.append(item.get('branża', ''))
+                    elif key == 'województwo':
+                        row_vals.append(item.get('województwo', ''))
+                    elif key == 'miasto':
+                        row_vals.append(item.get('miasto', ''))
                     else:
                         # Unknown column from template: leave empty
                         row_vals.append('')
@@ -3476,6 +3716,7 @@ def save_to_excel(data, filename=OUTPUT_FILE, city=None, append=False):
             # Save workbook back to template path
             wb.save(template_path)
             logger.info("Appended %s records to %s", len(data), template_path)
+            _rebuild_branza_sheets(wb, template_path)
             return
 
         # Fallback behaviour: create a new workbook (previous behaviour)
@@ -3483,13 +3724,16 @@ def save_to_excel(data, filename=OUTPUT_FILE, city=None, append=False):
         ws = wb.active
 
         # Fallback headers (Polish names matching template intent)
-        headers = ['Nazwa Salonu', 'Adres', 'Numer Telefonu', 'Adres E-mail', 'Adres E-mail 2', 'Adres E-mail 3', 'Other Emails', 'Sources']
+        headers = ['Branża', 'Województwo', 'Miasto', 'Nazwa Salonu', 'Adres', 'Numer Telefonu', 'Adres E-mail', 'Adres E-mail 2', 'Adres E-mail 3', 'Other Emails', 'Sources']
         ws.append(headers)
 
         for item in data:
             emails = item.get('emails', []) or []
             sources = item.get('sources') or []
             row = [
+                item.get('branża', ''),
+                item.get('województwo', ''),
+                item.get('miasto', ''),
                 item.get('name', ''),
                 item.get('formatted_address', ''),
                 item.get('formatted_phone_number', ''),
@@ -3547,10 +3791,13 @@ def save_to_csv(data, filename):
     try:
         with open(filename, mode='w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
-            writer.writerow(['Name', 'Address', 'Phone', 'Website', 'Email 1', 'Email 2', 'Email 3', 'Other Emails', 'Sources'])
+            writer.writerow(['Branża', 'Województwo', 'Miasto', 'Name', 'Address', 'Phone', 'Website', 'Email 1', 'Email 2', 'Email 3', 'Other Emails', 'Sources'])
             for item in data:
                 emails = item.get('emails', [])
                 row_data = [
+                    item.get('branża', ''),
+                    item.get('województwo', ''),
+                    item.get('miasto', ''),
                     item.get('name', ''),
                     item.get('formatted_address', ''),
                     item.get('formatted_phone_number', ''),
@@ -3573,7 +3820,7 @@ def append_to_csv_master(data, csv_path):
     Reads existing rows (if any) and deduplicates by normalized (name, phone)
     before appending, so each business appears only once even across multiple runs.
     """
-    CSV_HEADERS = ['Name', 'Address', 'Phone', 'Website', 'Email 1', 'Email 2', 'Email 3', 'Other Emails', 'Sources']
+    CSV_HEADERS = ['Branża', 'Województwo', 'Miasto', 'Name', 'Address', 'Phone', 'Website', 'Email 1', 'Email 2', 'Email 3', 'Other Emails', 'Sources']
 
     def _norm(s):
         return re.sub(r'[\s\-\(\)]+', '', str(s or '')).lower()
@@ -3602,6 +3849,9 @@ def append_to_csv_master(data, csv_path):
         existing_keys.add(key)
         emails = item.get('emails', [])
         new_rows.append({
+            'Branża': item.get('branża', ''),
+            'Województwo': item.get('województwo', ''),
+            'Miasto': item.get('miasto', ''),
             'Name': item.get('name', ''),
             'Address': item.get('formatted_address', ''),
             'Phone': item.get('formatted_phone_number', ''),
@@ -3668,6 +3918,7 @@ def main():
     # Variables to store interactive choices, defaults from args
     selected_query = args.query
     selected_location = args.location
+    selected_voivodeship = ''
     # Always extract emails unless explicitly disabled via future flag
     selected_emails = True if not args.emails else True
     
@@ -3698,6 +3949,26 @@ def main():
         if not new_name:
             return path
         return ensure_output_path(new_name, output_format)
+
+    # City -> Voivodeship lookup (used in wizard and CLI mode)
+    POLAND_LOCATIONS = {
+        "Dolnośląskie": ["Wrocław", "Wałbrzych", "Legnica", "Jelenia Góra", "Lubin", "Głogów", "Świdnica"],
+        "Kujawsko-Pomorskie": ["Bydgoszcz", "Toruń", "Włocławek", "Grudziądz", "Inowrocław"],
+        "Lubelskie": ["Lublin", "Zamość", "Chełm", "Biała Podlaska"],
+        "Lubuskie": ["Zielona Góra", "Gorzów Wielkopolski", "Nowa Sól"],
+        "Łódzkie": ["Łódź", "Piotrków Trybunalski", "Pabianice", "Tomaszów Mazowiecki", "Bełchatów"],
+        "Małopolskie": ["Kraków", "Tarnów", "Nowy Sącz", "Oświęcim", "Chrzanów"],
+        "Mazowieckie": ["Warszawa", "Radom", "Płock", "Siedlce", "Pruszków", "Legionowo"],
+        "Opolskie": ["Opole", "Kędzierzyn-Koźle", "Nysa"],
+        "Podkarpackie": ["Rzeszów", "Przemyśl", "Stalowa Wola", "Mielec"],
+        "Podlaskie": ["Białystok", "Suwałki", "Łomża"],
+        "Pomorskie": ["Gdańsk", "Gdynia", "Sopot", "Słupsk", "Tczew", "Wejherowo"],
+        "Śląskie": ["Katowice", "Bielsko-Biała", "Częstochowa", "Gliwice", "Zabrze", "Bytom", "Rybnik", "Tychy", "Dąbrowa Górnicza", "Chorzów", "Sosnowiec"],
+        "Świętokrzyskie": ["Kielce", "Ostrowiec Świętokrzyski", "Starachowice"],
+        "Warmińsko-Mazurskie": ["Olsztyn", "Elbląg", "Ełk"],
+        "Wielkopolskie": ["Poznań", "Kalisz", "Konin", "Piła", "Ostrów Wielkopolski", "Gniezno"],
+        "Zachodniopomorskie": ["Szczecin", "Koszalin", "Stargard", "Kołobrzeg", "Świnoujście"]
+    }
 
     # Interactive Wizard Mode
     if not any([args.query, args.location]):
@@ -3740,25 +4011,7 @@ def main():
 
         # 2. Choose Location (Voivodeship -> City)
         print(f"\nSTEP 2/3: Choose location")
-        POLAND_LOCATIONS = {
-            "Dolnośląskie": ["Wrocław", "Wałbrzych", "Legnica", "Jelenia Góra", "Lubin", "Głogów", "Świdnica"],
-            "Kujawsko-Pomorskie": ["Bydgoszcz", "Toruń", "Włocławek", "Grudziądz", "Inowrocław"],
-            "Lubelskie": ["Lublin", "Zamość", "Chełm", "Biała Podlaska"],
-            "Lubuskie": ["Zielona Góra", "Gorzów Wielkopolski", "Nowa Sól"],
-            "Łódzkie": ["Łódź", "Piotrków Trybunalski", "Pabianice", "Tomaszów Mazowiecki", "Bełchatów"],
-            "Małopolskie": ["Kraków", "Tarnów", "Nowy Sącz", "Oświęcim", "Chrzanów"],
-            "Mazowieckie": ["Warszawa", "Radom", "Płock", "Siedlce", "Pruszków", "Legionowo"],
-            "Opolskie": ["Opole", "Kędzierzyn-Koźle", "Nysa"],
-            "Podkarpackie": ["Rzeszów", "Przemyśl", "Stalowa Wola", "Mielec"],
-            "Podlaskie": ["Białystok", "Suwałki", "Łomża"],
-            "Pomorskie": ["Gdańsk", "Gdynia", "Sopot", "Słupsk", "Tczew", "Wejherowo"],
-            "Śląskie": ["Katowice", "Bielsko-Biała", "Częstochowa", "Gliwice", "Zabrze", "Bytom", "Rybnik", "Tychy", "Dąbrowa Górnicza", "Chorzów", "Sosnowiec"],
-            "Świętokrzyskie": ["Kielce", "Ostrowiec Świętokrzyski", "Starachowice"],
-            "Warmińsko-Mazurskie": ["Olsztyn", "Elbląg", "Ełk"],
-            "Wielkopolskie": ["Poznań", "Kalisz", "Konin", "Piła", "Ostrów Wielkopolski", "Gniezno"],
-            "Zachodniopomorskie": ["Szczecin", "Koszalin", "Stargard", "Kołobrzeg", "Świnoujście"]
-        }
-        
+
         while not selected_location:
             print("\n--- Voivodeships ---")
             voivodeships = sorted(POLAND_LOCATIONS.keys())
@@ -3772,6 +4025,7 @@ def main():
                 v_idx = int(v_choice)
                 if 1 <= v_idx <= len(voivodeships):
                     selected_v = voivodeships[v_idx-1]
+                    selected_voivodeship = selected_v
                     cities = sorted(POLAND_LOCATIONS[selected_v])
                     print(f"\n--- Cities ({selected_v}) ---")
                     for j, c in enumerate(cities, 1):
@@ -3830,7 +4084,12 @@ def main():
     location = (selected_location or args.location or "").strip()
     if not location:
         location = prompt_non_empty("Podaj miasto (location): ")
-        
+
+    # Derive voivodeship from city if not captured interactively (CLI mode)
+    if not selected_voivodeship and location:
+        _city_to_voi = {c.lower(): v for v, cities in POLAND_LOCATIONS.items() for c in cities}
+        selected_voivodeship = _city_to_voi.get(location.lower(), '')
+
     scrape_emails_choice = True
 
     template_path = os.path.join(OUTPUT_DIR, 'IdeaMusicLeads.xlsx')
@@ -4074,7 +4333,7 @@ def main():
     # Google Places enrichment: dla rekordów bez telefonu i bez strony www
     # używa findplacefromtext (tańsze niż textsearch) zamiast pełnego scrapowania
     if API_KEY:
-        enrich_with_google_places(all_results, location, session=session)
+        enrich_with_google_places(all_results, location, session=session, cache_conn=cache_conn)
 
     # If user wants emails, fetch them for each business with a website URL
     if scrape_emails_choice:
@@ -4129,6 +4388,12 @@ def main():
                 # Delay to avoid overloading servers
                 time.sleep(random.uniform(1.0, 2.0))
     
+    # Inject metadata into every record before saving
+    for _r in all_results:
+        _r.setdefault('branża', query)
+        _r.setdefault('miasto', location)
+        _r.setdefault('województwo', selected_voivodeship)
+
     # Save all data
     if all_results:
         if per_run_path is not None:
@@ -4136,10 +4401,11 @@ def main():
             logger.info("Per-run file saved: %s (%d records)", per_run_path, len(all_results))
             save_results(all_results, template_path, 'xlsx', city=location, append_to_template=True)
             logger.info("Appended %d records to master: %s", len(all_results), template_path)
-            csv_master_path = os.path.join(OUTPUT_DIR, 'IdeaMusicLeads.csv')
-            append_to_csv_master(all_results, csv_master_path)
         else:
             save_results(all_results, output_path, args.format, city=location, append_to_template=append_to_template)
+        csv_master_path = os.path.join(OUTPUT_DIR, 'IdeaMusicLeads.csv')
+        append_to_csv_master(all_results, csv_master_path)
+        logger.info("Appended %d records to CSV master: %s", len(all_results), csv_master_path)
     else:
         logger.info("No data to save.")
 
