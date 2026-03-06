@@ -194,13 +194,13 @@ def extract_external_website_from_profile(profile_url, session=None, skip_domain
 CATEGORY_KEYWORDS = {
     "spa": [
         "spa", "day spa", "spa & wellness", "rytual spa", "rytuał spa", "salon spa",
+        "wellness", "odnowa biologiczna",
         "masaz", "masaź", "masaż", "massage", "masazysta", "masażysta",
         "masaz relaksacyjny", "masaz klasyczny", "masaz leczniczy",
         "masaz sportowy", "masaz balijski", "masaz tajski", "masaz kobido",
         "masaz lomi", "masaz tkanek", "masaz goracymi kamieniami",
         "masaz aroma", "aromaterapia", "bodywork", "kobido"
     ],
-    "wellness": ["wellness", "odnowa biologiczna", "relaks", "relaksacja"],
     "joga": ["joga", "yoga", "hatha", "vinyasa", "ashtanga", "yin", "kundalini", "joga nidra"],
     "fizjoterapia": ["fizjoterapia", "rehabilitacja", "fizjo", "terapia manualna", "kinezyterapia"],
     "uroda": [
@@ -216,9 +216,14 @@ CATEGORY_KEYWORDS = {
         "hotel", "hotel spa", "hotel & spa", "resort", "pensjonat", "aparthotel",
         "spa hotel", "wellness hotel",
     ],
+    "restaurant": [
+        "restaurant", "restauracja", "restauracje", "bistro", "bar", "kawiarnia", "cafe",
+        "caffe", "trattoria", "pizzeria", "sushi", "grill", "gastro", "gastronomia",
+        "jadłodajnia", "bar mleczny", "food", "kuchnia",
+    ],
 }
 
-CATEGORY_PRIORITY = ["spa", "wellness", "joga", "fizjoterapia", "uroda", "fryzjer", "hotel"]
+CATEGORY_PRIORITY = ["spa", "wellness", "joga", "fizjoterapia", "uroda", "fryzjer", "hotel", "restaurant"]
 
 
 def map_query_to_category(query):
@@ -249,6 +254,8 @@ def fresha_business_type_for_query(query):
         return "beauty-salons"
     if category == "fryzjer":
         return "hair-salons"
+    if category == "restaurant":
+        return "restaurants"
     return "spas"
 
 
@@ -280,6 +287,8 @@ def fixly_path_for_query(query):
         return "kategoria/uroda"
     if category == "fryzjer":
         return "kategoria/fryzjer"
+    if category == "restaurant":
+        return "kategoria/gastronomia"
     return None
 
 
@@ -336,6 +345,8 @@ def fresha_category_keywords(category):
         return ["fryzjer", "barber", "salon fryzjerski", "strzyżenie", "koloryzacja"]
     if category == "hotel":
         return ["hotel", "resort", "pensjonat", "hotel spa"]
+    if category == "restaurant":
+        return ["restauracja", "restaurant", "bistro", "bar", "kawiarnia", "cafe", "pizzeria", "grill"]
     return []
 
 
@@ -579,7 +590,8 @@ def get_booksy_category_slug(query, session=None):
             "joga": "joga",
             "uroda": "uroda",
             "fryzjer": "fryzjerstwo",
-            "hotel": "masaz",  # hotels aren't on Booksy; fallback to spa/massage
+            "hotel": "masaz",      # hotels aren't on Booksy; fallback to spa/massage
+            "restaurant": None,    # restaurants aren't on Booksy
         }
         return booksy_category_map.get(mapped, mapped)
 
@@ -828,6 +840,7 @@ def scrape_booksy(query, location, max_pages=3, session=None):
         return results
 
     logger.info("Scraping Booksy category '%s' for %s", category_slug, location)
+    seen_urls: set = set()
     for page in range(1, max_pages + 1):
         page_url = f"{BOOKSY_BASE}/s/{category_slug}/{city_slug}"
         if page > 1:
@@ -841,12 +854,29 @@ def scrape_booksy(query, location, max_pages=3, session=None):
                 if page == 1:
                     logger.info("Booksy: no results found for %s", page_url)
                 break
-            logger.info("Booksy: found %s listings on page %s", len(page_results), page)
+            page_urls = {r['profile_url'] for r in page_results}
+            if page > 1 and page_urls.issubset(seen_urls):
+                logger.info("Booksy: page %s returned only already-seen listings — stopping pagination", page)
+                break
+            seen_urls.update(page_urls)
             results.extend(page_results)
+            logger.info("Booksy: found %s listings on page %s", len(page_results), page)
             time.sleep(random.uniform(1.0, 2.0))
         except Exception as e:
             logger.warning("Booksy: error fetching %s: %s", page_url, e)
             break
+
+    # Deduplicate by profile_url before deep scraping to avoid hitting the same page multiple times
+    seen_profiles: set = set()
+    unique_results = []
+    for item in results:
+        key = item.get('profile_url') or item.get('website') or ""
+        if key and key in seen_profiles:
+            continue
+        if key:
+            seen_profiles.add(key)
+        unique_results.append(item)
+    results = unique_results
 
     # Deep scrape Booksy profiles to get real external website URLs, emails, and phones
     if results:
@@ -2118,6 +2148,7 @@ KRS_PKD_MAP = {
     "uroda":       ["96.02.Z", "96.09.Z"],              # fryzjerstwo, pozostałe usługi
     "fryzjer":     ["96.02.Z"],
     "hotel":       ["55.10.Z", "55.20.Z", "93.21.Z"],  # hotele, obiekty noclegowe, parki rozrywki
+    "restaurant":  ["56.10.A", "56.10.B", "56.30.Z"],  # restauracje, ruchome placówki, bary
 }
 
 
@@ -2431,6 +2462,7 @@ def _aleo_category_slug(query):
         "uroda":       "uslugi-kosmetyczne-i-spa",
         "fryzjer":     "fryzjerstwo",
         "hotel":       "hotele-i-noclegi",
+        "restaurant":  "gastronomia",
     }
     return mapping.get(category, slugify(query))
 
@@ -2593,6 +2625,80 @@ def get_place_details(place_id, session=None):
     except requests.exceptions.RequestException as e:
         logger.error("Error fetching details for place %s: %s", place_id, e)
         return {}
+
+def enrich_with_google_places(results, location, session=None):
+    """For records missing phone (and optionally website), look them up via
+    Google Places findplacefromtext → place/details and fill in the gaps.
+
+    Uses the cheaper findplacefromtext endpoint (1 call per business) instead
+    of running a full textsearch, so API quota is only spent where needed.
+    """
+    if not API_KEY:
+        return
+
+    session = session or create_session()
+    candidates = [
+        r for r in results
+        if not r.get('formatted_phone_number') and not r.get('website')
+    ]
+    if not candidates:
+        logger.info("Google enrichment: all records already have phone or website — skipping")
+        return
+
+    logger.info("=== Google Places enrichment: %d records missing phone+website ===", len(candidates))
+
+    enriched = 0
+    for item in candidates:
+        name = item.get('name', '').strip()
+        if not name:
+            continue
+        query_text = f"{name} {location}"
+        try:
+            url = 'https://maps.googleapis.com/maps/api/place/findplacefromtext/json'
+            params = {
+                'input': query_text,
+                'inputtype': 'textquery',
+                'fields': 'place_id,name',
+                'locationbias': f'circle:30000@{location}',
+                'key': API_KEY,
+                'language': 'pl',
+            }
+            resp = session.get(url, params=params, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+
+            if data.get('status') != 'OK' or not data.get('candidates'):
+                continue
+
+            place_id = data['candidates'][0].get('place_id')
+            if not place_id:
+                continue
+
+            details = get_place_details(place_id, session=session)
+            if not details:
+                continue
+
+            phone = details.get('formatted_phone_number', '')
+            website = details.get('website', '')
+
+            if phone and not item.get('formatted_phone_number'):
+                item['formatted_phone_number'] = phone
+            if website and not item.get('website'):
+                item['website'] = website
+            if phone or website:
+                sources = item.get('sources') or []
+                if 'google' not in sources:
+                    item['sources'] = sources + ['google']
+                enriched += 1
+                logger.info("Google enrichment: ✓ %s → phone=%s website=%s", name, phone or '—', website or '—')
+
+            time.sleep(random.uniform(0.3, 0.6))
+
+        except Exception as e:
+            logger.warning("Google enrichment: error for '%s': %s", name, e)
+
+    logger.info("Google enrichment: filled %d/%d records", enriched, len(candidates))
+
 
 def can_fetch_url(url, respect_robots=False):
     if not respect_robots:
@@ -3461,6 +3567,67 @@ def save_to_csv(data, filename):
         logger.error("Error saving to CSV: %s", e)
 
 
+def append_to_csv_master(data, csv_path):
+    """Append new records to the cumulative CSV master file.
+
+    Reads existing rows (if any) and deduplicates by normalized (name, phone)
+    before appending, so each business appears only once even across multiple runs.
+    """
+    CSV_HEADERS = ['Name', 'Address', 'Phone', 'Website', 'Email 1', 'Email 2', 'Email 3', 'Other Emails', 'Sources']
+
+    def _norm(s):
+        return re.sub(r'[\s\-\(\)]+', '', str(s or '')).lower()
+
+    existing_keys: set = set()
+    existing_rows: list = []
+
+    os.makedirs(os.path.dirname(csv_path) or '.', exist_ok=True)
+
+    if os.path.exists(csv_path):
+        try:
+            with open(csv_path, newline='', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    existing_rows.append(row)
+                    key = (_norm(row.get('Name', '')), _norm(row.get('Phone', '')))
+                    existing_keys.add(key)
+        except Exception as e:
+            logger.warning("Could not read existing CSV master %s: %s", csv_path, e)
+
+    new_rows = []
+    for item in data:
+        key = (_norm(item.get('name', '')), _norm(item.get('formatted_phone_number', '')))
+        if key in existing_keys or key == ('', ''):
+            continue
+        existing_keys.add(key)
+        emails = item.get('emails', [])
+        new_rows.append({
+            'Name': item.get('name', ''),
+            'Address': item.get('formatted_address', ''),
+            'Phone': item.get('formatted_phone_number', ''),
+            'Website': item.get('website', ''),
+            'Email 1': emails[0] if len(emails) > 0 else '',
+            'Email 2': emails[1] if len(emails) > 1 else '',
+            'Email 3': emails[2] if len(emails) > 2 else '',
+            'Other Emails': ', '.join(emails[3:]) if len(emails) > 3 else '',
+            'Sources': ', '.join(item.get('sources') or []),
+        })
+
+    if not new_rows:
+        logger.info("CSV master: no new records to append (all %d already present)", len(data))
+        return
+
+    try:
+        with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=CSV_HEADERS)
+            writer.writeheader()
+            writer.writerows(existing_rows)
+            writer.writerows(new_rows)
+        logger.info("CSV master: appended %d new records → %s (%d total)", len(new_rows), csv_path, len(existing_rows) + len(new_rows))
+    except Exception as e:
+        logger.error("Error writing CSV master %s: %s", csv_path, e)
+
+
 def save_to_json(data, filename):
     try:
         with open(filename, mode='w', encoding='utf-8') as f:
@@ -3510,15 +3677,16 @@ def main():
         name = input(f"Podaj nazwę pliku do zapisu (domyślnie: {default_name}): ").strip()
         return name or default_name
 
-    def ensure_output_path(output_name, output_format, scraped_dir="scraped"):
-        os.makedirs(scraped_dir, exist_ok=True)
+    def ensure_output_path(output_name, output_format, scraped_dir=None):
+        out_dir = scraped_dir or OUTPUT_DIR
+        os.makedirs(out_dir, exist_ok=True)
         base_name = os.path.basename(output_name or OUTPUT_FILE)
         root, _ext = os.path.splitext(base_name)
         if not root:
             root = "results"
         fmt = (output_format or "xlsx").lower()
         ext = ".xlsx" if fmt == "xlsx" else ".csv" if fmt == "csv" else ".json"
-        return os.path.join(scraped_dir, f"{root}{ext}")
+        return os.path.join(out_dir, f"{root}{ext}")
 
     def resolve_existing_output(path, output_format):
         if not os.path.exists(path):
@@ -3534,41 +3702,44 @@ def main():
     # Interactive Wizard Mode
     if not any([args.query, args.location]):
         print("\n" + "="*40)
-        print("   KREATOR KONFIGURACJI SCRAPERA")
+        print("   SCRAPER CONFIGURATION WIZARD")
         print("="*40)
         
         # 1. Choose Industry
-        print("\nKROK 1/3: Wybierz branżę")
-        known_industries = ["spa", "wellness", "joga", "fizjoterapia", "uroda", "fryzjer", "hotel"]
+        print("\nSTEP 1/3: Choose industry")
+        known_industries = ["spa", "joga", "fizjoterapia", "uroda", "fryzjer", "hotel", "restaurant"]
         industry_labels = {
-            "spa": "SPA / Masaż / Kobido",
-            "wellness": "Wellness",
-            "joga": "Joga",
-            "fizjoterapia": "Fizjoterapia",
+            "spa":         "SPA / Massage / Wellness / Kobido",
+            "joga":        "Yoga",
+            "fizjoterapia":"Physiotherapy",
+            "uroda":       "Beauty",
+            "fryzjer":     "Hairdresser",
+            "hotel":       "Hotel",
+            "restaurant":  "Restaurant",
         }
         for i, k in enumerate(known_industries, 1):
             print(f"{i}. {industry_labels.get(k, k.upper())}")
-        print(f"{len(known_industries)+1}. Inna (wpisz ręcznie)")
-        
+        print(f"{len(known_industries)+1}. Other (type manually)")
+
         while not selected_query:
-            choice = input("Twój wybór: ").strip()
+            choice = input("Your choice: ").strip()
             if choice.isdigit():
                 idx = int(choice)
                 if 1 <= idx <= len(known_industries):
                     selected_query = known_industries[idx-1]
                 elif idx == len(known_industries) + 1:
-                    raw_input = input("Wpisz nazwę branży: ").strip()
+                    raw_input = input("Enter industry name: ").strip()
                     if raw_input and not is_probably_path(raw_input):
                         selected_query = raw_input
                     else:
-                        print("[!] Nieprawidłowa nazwa. Nie może być ścieżką do pliku.")
+                        print("[!] Invalid name. Cannot be a file path.")
                 else:
-                    print("[!] Nieprawidłowy numer.")
+                    print("[!] Invalid number.")
             else:
-                 print("[!] Wpisz numer z listy.")
+                print("[!] Enter a number from the list.")
 
         # 2. Choose Location (Voivodeship -> City)
-        print(f"\nKROK 2/3: Wybierz lokalizację")
+        print(f"\nSTEP 2/3: Choose location")
         POLAND_LOCATIONS = {
             "Dolnośląskie": ["Wrocław", "Wałbrzych", "Legnica", "Jelenia Góra", "Lubin", "Głogów", "Świdnica"],
             "Kujawsko-Pomorskie": ["Bydgoszcz", "Toruń", "Włocławek", "Grudziądz", "Inowrocław"],
@@ -3589,54 +3760,54 @@ def main():
         }
         
         while not selected_location:
-            print("\n--- Województwa ---")
+            print("\n--- Voivodeships ---")
             voivodeships = sorted(POLAND_LOCATIONS.keys())
             for i, v in enumerate(voivodeships, 1):
                 print(f"{i}. {v}")
-            print(f"{len(voivodeships)+1}. Inne / Wpisz ręcznie miasto")
-            
-            v_choice = input("Wybierz województwo: ").strip()
-            
+            print(f"{len(voivodeships)+1}. Other / Enter city manually")
+
+            v_choice = input("Choose voivodeship: ").strip()
+
             if v_choice.isdigit():
                 v_idx = int(v_choice)
                 if 1 <= v_idx <= len(voivodeships):
                     selected_v = voivodeships[v_idx-1]
                     cities = sorted(POLAND_LOCATIONS[selected_v])
-                    print(f"\n--- Miasta ({selected_v}) ---")
+                    print(f"\n--- Cities ({selected_v}) ---")
                     for j, c in enumerate(cities, 1):
                         print(f"{j}. {c}")
-                    print(f"{len(cities)+1}. Wpisz inne miasto z tego województwa")
-                    
-                    c_choice = input("Wybierz miasto: ").strip()
+                    print(f"{len(cities)+1}. Enter another city from this voivodeship")
+
+                    c_choice = input("Choose city: ").strip()
                     if c_choice.isdigit():
                         c_idx = int(c_choice)
                         if 1 <= c_idx <= len(cities):
                             selected_location = cities[c_idx-1]
                         elif c_idx == len(cities) + 1:
-                            custom_city = input("Wpisz nazwę miasta: ").strip()
+                            custom_city = input("Enter city name: ").strip()
                             if custom_city: selected_location = custom_city
                         else:
-                            print("[!] Nieprawidłowy numer miasta.")
+                            print("[!] Invalid city number.")
                     else:
-                        print("[!] Nieprawidłowy wybór.")
+                        print("[!] Invalid choice.")
                 elif v_idx == len(voivodeships) + 1:
-                     custom_loc = input("Wpisz nazwę miasta: ").strip()
-                     if custom_loc: selected_location = custom_loc
+                    custom_loc = input("Enter city name: ").strip()
+                    if custom_loc: selected_location = custom_loc
                 else:
-                    print("[!] Nieprawidłowy numer województwa.")
+                    print("[!] Invalid voivodeship number.")
             else:
-                print("[!] Wpisz numer z listy.")
+                print("[!] Enter a number from the list.")
 
         # 3. Emails (always on)
-        print(f"\nKROK 3/3: Pobieranie emaili")
-        print("Emaile będą pobierane automatycznie przy każdym uruchomieniu.")
+        print(f"\nSTEP 3/3: Email extraction")
+        print("Emails will be collected automatically on every run.")
         selected_emails = True
 
         print("\n" + "="*40)
-        print(f"KONFIGURACJA GOTOWA:")
-        print(f"Branża: {selected_query}")
-        print(f"Miasto: {selected_location}")
-        print(f"Emaile: {'TAK' if selected_emails else 'NIE'}")
+        print(f"CONFIGURATION READY:")
+        print(f"Industry: {selected_query}")
+        print(f"City: {selected_location}")
+        print(f"Emails: {'YES' if selected_emails else 'NO'}")
         print("="*40)
         print("Uruchamiam proces scrapowania...\n")
 
@@ -3662,33 +3833,25 @@ def main():
         
     scrape_emails_choice = True
 
-    # Resolve output path before scraping (to keep log filename aligned)
-    if not any([args.query, args.location]) and args.output == OUTPUT_FILE:
-        suggested_root = f"{slugify(query)}_{slugify(location)}"
-        chosen_name = prompt_for_filename(f"{suggested_root}")
-        output_path = ensure_output_path(chosen_name, args.format)
-    else:
-        output_path = ensure_output_path(args.output, args.format)
-
-    # If the chosen output is the standard template, ask whether to append to it
     template_path = os.path.join(OUTPUT_DIR, 'IdeaMusicLeads.xlsx')
-    append_to_template = False
 
-    if os.path.exists(template_path) and os.path.abspath(output_path) == os.path.abspath(template_path):
-        ans = input(f"Plik {template_path} już istnieje. Dopisać do niego? (t/n): ").strip().lower()
-        if ans == 't':
-            append_to_template = True
-        else:
-            # Ask for alternative filename
-            new_name = input("Podaj nazwę pliku do zapisu (bez rozszerzenia, pusty = anuluj): ").strip()
-            if new_name:
-                output_path = ensure_output_path(new_name, args.format)
-            else:
-                print("Anulowano zapis do szablonu. Kontynuuję; podaj inną nazwę przy ponownym uruchomieniu.")
-                # keep output_path as originally provided (will trigger overwrite prompt)
+    # Dual-save mode (default): per-run archive + auto-append to master IdeaMusicLeads.xlsx.
+    # When --output is set to a custom file, fall back to single-file behavior.
+    custom_output = (args.output != OUTPUT_FILE)
 
-    if not append_to_template:
-        output_path = resolve_existing_output(output_path, args.format)
+    if custom_output:
+        output_path = ensure_output_path(args.output, args.format)
+        append_to_template = os.path.abspath(output_path) == os.path.abspath(template_path)
+        if not append_to_template:
+            output_path = resolve_existing_output(output_path, args.format)
+        per_run_path = None
+    else:
+        from datetime import date as _date
+        run_date = _date.today().strftime("%Y%m%d")
+        per_run_root = f"{slugify(query)}_{slugify(location)}_{run_date}"
+        per_run_path = os.path.join(OUTPUT_DIR, f"{per_run_root}.xlsx")
+        output_path = per_run_path
+        append_to_template = True
 
     setup_run_logging(output_path)
     use_google_choice = True
@@ -3821,10 +3984,10 @@ def main():
     )
     annotate_sources(all_fixly_results, 'fixly')
 
-    # Fetch data from KRS API (free government API, no anti-bot)
-    logger.info("=== Fetching data from KRS API ===")
-    all_krs_results = scrape_krs_api(normalized_query, location, session=session)
-    annotate_sources(all_krs_results, 'krs')
+    # KRS search API (api-rs.ms.gov.pl) is unavailable — DNS fails.
+    # KRS enrichment (enrich_with_krs) still works for records that already have a KRS
+    # number in their profile_url; that runs later after merge.
+    all_krs_results = []
 
     # Fetch data from Aleo.com (Polish B2B catalog)
     logger.info("=== Fetching data from Aleo.com ===")
@@ -3907,7 +4070,12 @@ def main():
     # Działa dla wyników z każdego źródła (Panorama, PKT, Aleo, KRS search, itp.)
     logger.info("=== KRS enrichment (OdpisAktualny) ===")
     enrich_with_krs(all_results, session=session)
-    
+
+    # Google Places enrichment: dla rekordów bez telefonu i bez strony www
+    # używa findplacefromtext (tańsze niż textsearch) zamiast pełnego scrapowania
+    if API_KEY:
+        enrich_with_google_places(all_results, location, session=session)
+
     # If user wants emails, fetch them for each business with a website URL
     if scrape_emails_choice:
         logger.info("=== Fetching emails from websites ===")
@@ -3961,9 +4129,17 @@ def main():
                 # Delay to avoid overloading servers
                 time.sleep(random.uniform(1.0, 2.0))
     
-    # Save all data to Excel file
+    # Save all data
     if all_results:
-        save_results(all_results, output_path, args.format, city=location, append_to_template=append_to_template)
+        if per_run_path is not None:
+            save_results(all_results, per_run_path, 'xlsx', city=location, append_to_template=False)
+            logger.info("Per-run file saved: %s (%d records)", per_run_path, len(all_results))
+            save_results(all_results, template_path, 'xlsx', city=location, append_to_template=True)
+            logger.info("Appended %d records to master: %s", len(all_results), template_path)
+            csv_master_path = os.path.join(OUTPUT_DIR, 'IdeaMusicLeads.csv')
+            append_to_csv_master(all_results, csv_master_path)
+        else:
+            save_results(all_results, output_path, args.format, city=location, append_to_template=append_to_template)
     else:
         logger.info("No data to save.")
 
