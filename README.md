@@ -127,7 +127,7 @@ python -m venv .venv
 # install deps (first run)
 pip install -r requirements.txt
 # run (the script will prompt if saving to the template file)
-python scraper.py --output scraped/IdeaMusicLeads.xlsx
+python scraper.py --output data/processed/IdeaMusicLeads.xlsx
 ```
 
 CMD:
@@ -141,8 +141,8 @@ You can also simply launch the helper batch file which prefers the `.venv` Pytho
 .\run_scraper.bat
 ```
 
-Note: if the output file is `scraped/IdeaMusicLeads.xlsx` and it already exists, the script will ask:
-`Plik scraped\IdeaMusicLeads.xlsx już istnieje. Dopisać do niego? (t/n):`
+Note: if the output file is `data/processed/IdeaMusicLeads.xlsx` and it already exists, the script will ask:
+`Plik data\processed\IdeaMusicLeads.xlsx już istnieje. Dopisać do niego? (t/n):`
 - answer `t` to merge/append into the template (updates existing rows and adds new ones);
 - answer `n` to be prompted for a new filename and create a separate file.
 
@@ -187,6 +187,18 @@ Available flags:
 *   **Booksy/Moment:** Booksy posiada własne slugi kategorii i miast — w razie braku dopasowania wyniki mogą być puste.
 *   **Firmy.net:** link do prawdziwej strony firmy bywa ukryty w JS; ekstrakcja jest best‑effort.
 *   **Email extraction:** działa tylko dla stron firm. Jeśli źródło podaje wyłącznie link do katalogu, emaile mogą się nie pojawić.
+
+## Project Hygiene (Phase 1)
+
+To reduce root-folder clutter, helper assets are being grouped by purpose:
+
+*   `scripts/diagnostics/` — one-off debug/inspection scripts.
+*   `scripts/manual_checks/` — manual smoke checks not used by `pytest`.
+*   `data/samples/` — optional small test/demo fixtures that can be versioned.
+*   `data/templates/` — optional template files intended to stay in repo.
+*   `docs/research/` — long-form research notes and planning docs.
+
+Runtime outputs and caches remain ignored via `.gitignore` (e.g. logs, generated spreadsheets, cache DBs).
 
 ## Potential Future Improvements
 

@@ -1,5 +1,6 @@
-from scraper import scrape_fresha
+"""Legacy wrapper.
 
-print('Running Fresha sitemap test...')
-res = scrape_fresha('spa', 'Wrocław', max_pages=1, use_headless=False)
-print('Got', len(res), 'results')
+Moved to scripts/manual_checks/fresha_sitemap_check.py
+"""
+
+from scripts.manual_checks.fresha_sitemap_check import *  # noqa: F401,F403

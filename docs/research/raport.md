@@ -445,4 +445,3 @@ Krok 5: Monitoring
 * 3 tygodnie warmup  
 * Profesjonalne narzędzie z analytics  
 * Czyszczenie listy przed wysyłką
-

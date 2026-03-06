@@ -1,15 +1,71 @@
-# Ignore runtime and generated folders
+# -----------------------------
+# Runtime output and generated data
+# -----------------------------
 logs/
-scraped/
+Data/Raport/
+data/processed/
+data/raw/
+data/cache/
 
+# Legacy / ad-hoc output files in repo root
+*.log
+*.xlsx
+*.xls
+*.csv
+*.json
+
+# Keep small, intentional fixtures/templates when needed
+!data/samples/
+!data/samples/**
+!data/templates/
+!data/templates/**
+
+# -----------------------------
 # Python artifacts
+# -----------------------------
 __pycache__/
 *.py[cod]
 *.pyo
+*.pyd
+*.so
 
-# Virtual env
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# Build/distribution
+build/
+dist/
+*.egg-info/
+
+# -----------------------------
+# Virtual environments
+# -----------------------------
 .venv/
+venv/
+env/
 
-# SQLite DBs and env files
+# -----------------------------
+# Local databases and secrets
+# -----------------------------
 *.sqlite
+*.sqlite3
+*.db
 .env
+.env.*
+
+# -----------------------------
+# IDE / OS files
+# -----------------------------
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# Notebooks
+.ipynb_checkpoints/

@@ -1,7 +1,6 @@
-import pandas as pd
-from pathlib import Path
-base = Path(__file__).resolve().parent
-file = base / 'scraped' / 'compare_test_vs_new_08.csv'
-df = pd.read_csv(file)
-print('Comparison rows:', len(df))
-print(df.head(10).to_string(index=False))
+"""Legacy wrapper.
+
+Moved to scripts/diagnostics/print_compare_head.py
+"""
+
+from scripts.diagnostics.print_compare_head import *  # noqa: F401,F403

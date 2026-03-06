@@ -25,6 +25,7 @@ load_dotenv()
 API_KEY = os.getenv('GOOGLE_MAPS_API_KEY')
 
 OUTPUT_FILE = 'results.xlsx'  # Changed from 'wyniki.xlsx'
+OUTPUT_DIR = os.path.join('Data', 'Raport')
 BOOKSY_BASE = "https://booksy.com/pl-pl"
 SPAEDEN_RANKING_URL = "https://www.spaeden.pl/spa-wellness/rankingi-spa/2909-najlepsze-hotele-spa-ranking-100-best-spa-hotels"
 FRESHA_BASE = "https://www.fresha.com"
@@ -35,6 +36,9 @@ OFERTEO_BASE = "https://www.oferteo.pl"
 MOMENT_BASE = "https://www.moment.pl"
 FIRMYNET_BASE = "https://www.firmy.net"
 BIZNESFINDER_BASE = "https://www.biznesfinder.pl"
+KRS_API_BASE = "https://api-rs.ms.gov.pl"       # search/query API (unofficial)
+KRS_LOOKUP_BASE = "https://api-krs.ms.gov.pl"  # official lookup-by-KRS-number API
+ALEO_BASE = "https://aleo.com"
 
 LOG_FORMAT = "%(asctime)s | %(levelname)s | %(message)s"
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
@@ -199,9 +203,22 @@ CATEGORY_KEYWORDS = {
     "wellness": ["wellness", "odnowa biologiczna", "relaks", "relaksacja"],
     "joga": ["joga", "yoga", "hatha", "vinyasa", "ashtanga", "yin", "kundalini", "joga nidra"],
     "fizjoterapia": ["fizjoterapia", "rehabilitacja", "fizjo", "terapia manualna", "kinezyterapia"],
+    "uroda": [
+        "uroda", "salon kosmetyczny", "kosmetyczka", "kosmetologia", "makijaz",
+        "makijaż", "depilacja", "paznokcie", "manicure", "pedicure", "brwi",
+        "rzesy", "rzęsy", "lifting", "mezoterapia", "medycyna estetyczna",
+    ],
+    "fryzjer": [
+        "fryzjer", "fryzjerstwo", "salon fryzjerski", "barber", "barbershop",
+        "strzyżenie", "koloryzacja", "keratyna", "farbowanie wlosow",
+    ],
+    "hotel": [
+        "hotel", "hotel spa", "hotel & spa", "resort", "pensjonat", "aparthotel",
+        "spa hotel", "wellness hotel",
+    ],
 }
 
-CATEGORY_PRIORITY = ["spa", "wellness", "joga", "fizjoterapia"]
+CATEGORY_PRIORITY = ["spa", "wellness", "joga", "fizjoterapia", "uroda", "fryzjer", "hotel"]
 
 
 def map_query_to_category(query):
@@ -228,6 +245,10 @@ def fresha_business_type_for_query(query):
         return "therapy-centers"
     if category == "joga":
         return "yoga"
+    if category == "uroda":
+        return "beauty-salons"
+    if category == "fryzjer":
+        return "hair-salons"
     return "spas"
 
 
@@ -255,6 +276,10 @@ def fixly_path_for_query(query):
         return "kategoria/fizjoterapia"
     if category == "joga":
         return "kategoria/joga"
+    if category == "uroda":
+        return "kategoria/uroda"
+    if category == "fryzjer":
+        return "kategoria/fryzjer"
     return None
 
 
@@ -305,6 +330,12 @@ def fresha_category_keywords(category):
         return ["joga", "yoga", "vinyasa", "ashtanga", "hatha", "kundalini", "yin"]
     if category == "fizjoterapia":
         return ["fizjo", "fizjoterapia", "rehabilitacja", "physio", "therapy", "terapia"]
+    if category == "uroda":
+        return ["uroda", "kosmetyczka", "salon kosmetyczny", "makijaz", "depilacja", "paznokcie"]
+    if category == "fryzjer":
+        return ["fryzjer", "barber", "salon fryzjerski", "strzyżenie", "koloryzacja"]
+    if category == "hotel":
+        return ["hotel", "resort", "pensjonat", "hotel spa"]
     return []
 
 
@@ -323,6 +354,24 @@ def create_session():
     session.mount("http://", adapter)
     session.mount("https://", adapter)
     return session
+
+
+def create_cffi_session():
+    """Create a curl_cffi session that impersonates Chrome TLS fingerprint.
+
+    Falls back to a standard requests session if curl_cffi is not installed.
+    Use this for sources protected by Cloudflare or TLS fingerprint analysis
+    (e.g. Cylex, PKT.pl, Panorama Firm).
+    """
+    try:
+        from curl_cffi import requests as cffi_requests
+        session = cffi_requests.Session(impersonate="chrome124")
+        logger.debug("curl_cffi session created (Chrome124 TLS impersonation)")
+        return session
+    except ImportError:
+        logger.warning("curl_cffi not installed — falling back to standard requests session. "
+                       "Install with: pip install curl_cffi")
+        return create_session()
 
 
 def _detect_chrome_major_version():
@@ -345,10 +394,46 @@ def _detect_chrome_major_version():
 
 
 def get_rendered_html(url, wait_seconds=3, timeout=25):
+    """Fetch JS-rendered HTML using nodriver (direct Chrome connection, no ChromeDriver).
+
+    Falls back to undetected_chromedriver if nodriver is not installed.
+    nodriver provides better anti-detect stealth as it communicates directly with
+    the browser binary without the ChromeDriver intermediary (2025+ standard).
+    Install with: pip install nodriver
+    """
+    # Primary: nodriver (better stealth, no ChromeDriver layer)
+    try:
+        import nodriver as nd
+        import asyncio
+
+        async def _fetch():
+            browser = await nd.start(headless=True)
+            try:
+                page = await browser.get(url)
+                await asyncio.sleep(wait_seconds)
+                html = await page.get_content()
+                return html
+            finally:
+                browser.stop()
+
+        try:
+            return asyncio.run(_fetch())
+        except RuntimeError:
+            # Already inside an event loop (e.g. Jupyter) — use nest_asyncio or thread
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(asyncio.run, _fetch())
+                return future.result(timeout=timeout + 5)
+    except ImportError:
+        pass
+    except Exception as e:
+        logger.warning("nodriver fetch failed for %s: %s", url, e)
+
+    # Fallback: undetected_chromedriver
     try:
         import undetected_chromedriver as uc
     except Exception as e:
-        logger.warning("Headless unavailable (undetected_chromedriver): %s", e)
+        logger.warning("Headless unavailable (nodriver and undetected_chromedriver both missing): %s", e)
         return None
 
     options = uc.ChromeOptions()
@@ -358,7 +443,6 @@ def get_rendered_html(url, wait_seconds=3, timeout=25):
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--window-size=1280,720")
 
-    # Detect installed Chrome version and force matching driver
     chrome_ver = _detect_chrome_major_version()
     if chrome_ver:
         logger.debug("Detected Chrome major version: %s", chrome_ver)
@@ -401,6 +485,68 @@ def render_with_playwright(url, timeout_ms=25000):
         return None
 
 
+def _playwright_reveal_email(profile_url, timeout_ms=20000):
+    """Open a business profile page with Playwright, click the 'Pokaż e-mail' button,
+    and return any email addresses found after the reveal.
+
+    Works for PKT.pl and Panorama Firm where emails are loaded via XHR on button click.
+    Returns an empty list if Playwright is unavailable or no emails are found.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return []
+
+    email_pattern = re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,7}\b')
+    # Selectors for the "show email" button across PKT and Panorama Firm
+    reveal_selectors = [
+        "span.call-text",          # PKT.pl
+        "a.show-email",            # Panorama Firm
+        "[data-action='show-email']",
+        "button.show-email",
+        "a[href*='mailto:']",      # direct mailto links (fallback)
+        ".email-reveal",
+        "[class*='show-email']",
+        "[class*='reveal-email']",
+    ]
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page(
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                           '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+            )
+            page.goto(profile_url, wait_until="domcontentloaded", timeout=timeout_ms)
+
+            clicked = False
+            for selector in reveal_selectors:
+                try:
+                    btn = page.query_selector(selector)
+                    if btn and btn.is_visible():
+                        btn.click()
+                        page.wait_for_timeout(1500)  # wait for XHR
+                        clicked = True
+                        break
+                except Exception:
+                    continue
+
+            html = page.content()
+            browser.close()
+
+            # Search in deobfuscated HTML
+            emails = email_pattern.findall(_deobfuscate_emails(html))
+            # Filter out generic / noisy domains
+            emails = [e for e in emails if not any(
+                d in e.lower() for d in ['example.com', 'domain.com', 'sentry.io', 'wixpress.com']
+            )]
+            if emails and clicked:
+                logger.info("Playwright email reveal found %s email(s) on %s", len(emails), profile_url)
+            return list(dict.fromkeys(emails))
+    except Exception as e:
+        logger.debug("Playwright email reveal failed for %s: %s", profile_url, e)
+        return []
+
+
 def fetch_html(url, session=None, use_headless=False, headless_wait=3, timeout=20):
     session = session or create_session()
     try:
@@ -431,6 +577,9 @@ def get_booksy_category_slug(query, session=None):
             "wellness": "masaz",
             "fizjoterapia": "fizjoterapia",
             "joga": "joga",
+            "uroda": "uroda",
+            "fryzjer": "fryzjerstwo",
+            "hotel": "masaz",  # hotels aren't on Booksy; fallback to spa/massage
         }
         return booksy_category_map.get(mapped, mapped)
 
@@ -795,8 +944,6 @@ def extract_fresha_name_address(container):
     return name, address
 
 
-from urllib.robotparser import RobotFileParser
-
 # Cache robots parser per host
 _ROBOTS_CACHE = {}
 
@@ -1066,7 +1213,7 @@ def extract_cylex_profile(profile_url, session=None, use_headless=False, headles
 
 def scrape_cylex(query, location, session=None, max_pages=3, use_headless=False, headless_wait=3):
     results = []
-    session = session or create_session()
+    session = session or create_cffi_session()
     keywords = category_keywords_for_query(query)
 
     seen_profiles = set()
@@ -1773,10 +1920,10 @@ def normalize_address(address):
     address = re.sub(r"\s+", " ", address)
     return address.strip()
 
-def scrape_panorama_firm(query, location, max_pages=3, session=None):
+def scrape_panorama_firm(query, location, max_pages=3, session=None, use_headless=False):
     """Scrapes data from Panorama Firm website."""
     results = []
-    session = session or create_session()
+    session = session or create_cffi_session()
     
     try:
         logger.info("Scraping data from Panorama Firm for: %s in %s", query, location)
@@ -1810,35 +1957,47 @@ def scrape_panorama_firm(query, location, max_pages=3, session=None):
             for business in businesses:
                 try:
                     # Basic data
-                    name_elem = business.select_one('h2.company-name')
+                    name_elem = business.select_one('h2.company-name a') or business.select_one('h2.company-name')
                     name = name_elem.text.strip() if name_elem else "Unknown Name"
-                    
+
+                    # Profile URL on panoramafirm.pl
+                    profile_url = ""
+                    if name_elem and name_elem.get('href'):
+                        href = name_elem['href']
+                        profile_url = href if href.startswith('http') else base_url + href
+
                     # Address
                     address_elem = business.select_one('div.address')
                     address = address_elem.text.strip() if address_elem else ""
-                    
+
                     # Phone
                     phone_elem = business.select_one('a[data-company-phone]')
                     phone = phone_elem.get('data-company-phone', "") if phone_elem else ""
-                    
+
                     # Website
                     website_elem = business.select_one('a.icon-website')
                     website = website_elem.get('href', "") if website_elem else ""
-                    
+
                     # Check if it's not an internal Panorama Firm link
                     if website and not website.startswith(('http://', 'https://')):
                         website = ""
-                    
+
+                    # Try to reveal hidden email via Playwright click
+                    emails = []
+                    if use_headless and profile_url:
+                        emails = _playwright_reveal_email(profile_url)
+
                     result = {
                         'name': name,
                         'formatted_address': address,
                         'formatted_phone_number': phone,
                         'website': website,
-                        'emails': [] # Initialize emails list
+                        'profile_url': profile_url,
+                        'emails': emails,
                     }
-                    
+
                     results.append(result)
-                    
+
                 except Exception as e:
                     logger.warning("Error processing a business entry: %s", e)
             
@@ -1851,10 +2010,10 @@ def scrape_panorama_firm(query, location, max_pages=3, session=None):
         logger.error("Error during Panorama Firm scraping: %s", e)
         return results
 
-def scrape_pkt_pl(query, location, max_pages=3, session=None):
+def scrape_pkt_pl(query, location, max_pages=3, session=None, use_headless=False):
     """Scrapes data from PKT.pl website."""
     results = []
-    session = session or create_session()
+    session = session or create_cffi_session()
     
     try:
         logger.info("Scraping data from PKT.pl for: %s in %s", query, location)
@@ -1890,33 +2049,45 @@ def scrape_pkt_pl(query, location, max_pages=3, session=None):
                     # Basic data
                     name_elem = business.select_one('h2.company-name a')
                     name = name_elem.text.strip() if name_elem else "Unknown Name"
-                    
+
+                    # Profile URL on PKT.pl
+                    profile_url = ""
+                    if name_elem and name_elem.get('href'):
+                        href = name_elem['href']
+                        profile_url = href if href.startswith('http') else base_url + href
+
                     # Address
                     address_elem = business.select_one('address.rest-address')
                     address = address_elem.text.strip() if address_elem else ""
-                    
+
                     # Phone
                     phone_elem = business.select_one('a.icon-telephone')
                     phone = phone_elem.text.strip() if phone_elem else ""
-                    
+
                     # Website
                     website_elem = business.select_one('a.company-url')
                     website = website_elem.get('href', "") if website_elem else ""
-                    
+
                     # Check if it's not an internal PKT.pl link
                     if website and base_url in website:
                         website = ""
-                    
+
+                    # Try to reveal hidden email via Playwright click
+                    emails = []
+                    if use_headless and profile_url:
+                        emails = _playwright_reveal_email(profile_url)
+
                     result = {
                         'name': name,
                         'formatted_address': address,
                         'formatted_phone_number': phone,
                         'website': website,
-                        'emails': []
+                        'profile_url': profile_url,
+                        'emails': emails,
                     }
-                    
+
                     results.append(result)
-                    
+
                 except Exception as e:
                     logger.warning("Error processing a business entry: %s", e)
             
@@ -1928,6 +2099,429 @@ def scrape_pkt_pl(query, location, max_pages=3, session=None):
     except Exception as e:
         logger.error("Error during PKT.pl scraping: %s", e)
         return results
+
+# ---------------------------------------------------------------------------
+# KRS API (Krajowy Rejestr Sądowy) — free REST API from Ministry of Justice
+#
+# Dwa API o różnych rolach:
+#   KRS_API_BASE    = api-rs.ms.gov.pl  → wyszukiwarka (search by PKD/name/city)
+#   KRS_LOOKUP_BASE = api-krs.ms.gov.pl → lookup po numerze KRS (OdpisAktualny)
+# ---------------------------------------------------------------------------
+
+# Mapping: internal category -> list of PKD codes to query
+KRS_PKD_MAP = {
+    "spa":         ["96.04.Z", "93.13.Z", "93.11.Z"],  # wellness, siłownie, obiekty sportowe
+    "wellness":    ["96.04.Z"],
+    "masaz":       ["96.04.Z"],
+    "fizjoterapia":["86.90.A", "86.90.B", "86.10.Z"],  # fizjoterapia, inne usługi zdrowotne
+    "joga":        ["93.13.Z", "85.51.Z"],              # siłownie, pozaszkolne formy edukacji
+    "uroda":       ["96.02.Z", "96.09.Z"],              # fryzjerstwo, pozostałe usługi
+    "fryzjer":     ["96.02.Z"],
+    "hotel":       ["55.10.Z", "55.20.Z", "93.21.Z"],  # hotele, obiekty noclegowe, parki rozrywki
+}
+
+
+def _extract_krs_number(url):
+    """Wyciąga numer KRS z URL profilu ekrs.ms.gov.pl lub z dowolnego tekstu.
+
+    Obsługiwane formaty:
+      https://ekrs.ms.gov.pl/web/wyszukiwarka-krs/strona-glowna?numer=0000123456
+      /krs/0000123456
+      numer KRS: 0000123456
+    """
+    if not url:
+        return ''
+    m = re.search(r'numer=(\d{10})', url)
+    if m:
+        return m.group(1)
+    m = re.search(r'/krs/(\d{10})', url)
+    if m:
+        return m.group(1)
+    m = re.search(r'\b(\d{10})\b', url)
+    if m:
+        return m.group(1)
+    return ''
+
+
+def fetch_krs_aktualny(krs_num, session=None, rejestr='P'):
+    """Pobiera OdpisAktualny z oficjalnego API api-krs.ms.gov.pl dla podanego numeru KRS.
+
+    Endpoint: GET /api/krs/OdpisAktualny/{krs}?rejestr={rejestr}&format=json
+    Zwraca dict z polami: name, formatted_address, formatted_phone_number,
+    website, emails, profile_url  — lub None gdy błąd/404.
+    """
+    if not krs_num:
+        return None
+    session = session or create_session()
+    url = f"{KRS_LOOKUP_BASE}/api/krs/OdpisAktualny/{krs_num}"
+    try:
+        resp = session.get(
+            url,
+            params={'rejestr': rejestr, 'format': 'json'},
+            headers={'Accept': 'application/json'},
+            timeout=20,
+        )
+        if resp.status_code == 404:
+            logger.debug("KRS OdpisAktualny: podmiot %s nie znaleziony", krs_num)
+            return None
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        logger.debug("KRS OdpisAktualny: błąd dla %s: %s", krs_num, e)
+        return None
+
+    # Odpowiedź ma strukturę zależną od formy prawnej; próbujemy kilka ścieżek
+    try:
+        odpis = data.get('odpis') or data
+        dane = odpis.get('dane', {}) or {}
+
+        # Nazwa
+        name = (
+            dane.get('nazwa') or
+            dane.get('nazwaSkrocona') or
+            (odpis.get('naglowekA', {}) or {}).get('firmaNazwa') or
+            ''
+        ).strip()
+
+        # Adres siedziby
+        adres_dict = (
+            dane.get('adresSiedziby') or
+            dane.get('adres') or
+            (odpis.get('dzial1', {}) or {}).get('siedzibaIAdres', {}) or
+            {}
+        )
+        street  = adres_dict.get('ulica') or adres_dict.get('adresUlica') or ''
+        building = adres_dict.get('nrDomu') or adres_dict.get('nrLokalu') or ''
+        postcode = adres_dict.get('kodPocztowy') or ''
+        city    = adres_dict.get('miejscowosc') or adres_dict.get('miasto') or ''
+        address = ' '.join(filter(None, [street, building, postcode, city])).strip()
+
+        # Kontakt
+        kontakt = dane.get('kontakt') or {}
+        email   = (kontakt.get('email') or dane.get('email') or dane.get('adresEmail') or '').strip()
+        phone   = (kontakt.get('telefon') or dane.get('telefon') or '').strip()
+        website = (kontakt.get('stronaWWW') or dane.get('stronaInternetowa') or dane.get('www') or '').strip()
+        if website and not website.startswith('http'):
+            website = 'https://' + website
+
+        profile_url = f"https://ekrs.ms.gov.pl/web/wyszukiwarka-krs/strona-glowna?numer={krs_num}"
+
+        return {
+            'name': name,
+            'formatted_address': address,
+            'formatted_phone_number': phone,
+            'website': website,
+            'profile_url': profile_url,
+            'emails': [email] if email else [],
+        }
+    except Exception as e:
+        logger.debug("KRS OdpisAktualny: błąd parsowania dla %s: %s", krs_num, e)
+        return None
+
+
+def _parse_krs_subject(subject):
+    """Extract fields from a KRS search result JSON object (api-rs.ms.gov.pl)."""
+    dane = subject.get('dane', {}) or subject
+    name = (dane.get('nazwa') or dane.get('nazwaSkrocona') or '').strip()
+    if not name:
+        return None
+
+    adres = dane.get('adres', {}) or {}
+    street   = adres.get('ulica', '') or ''
+    building = adres.get('nrDomu', '') or ''
+    city     = adres.get('miejscowosc', '') or ''
+    postcode = adres.get('kodPocztowy', '') or ''
+    address  = ' '.join(filter(None, [street, building, postcode, city])).strip()
+
+    email   = (dane.get('email') or dane.get('adresEmail') or '').strip()
+    website = (dane.get('stronaInternetowa') or dane.get('www') or '').strip()
+    if website and not website.startswith('http'):
+        website = 'https://' + website
+
+    krs_num = dane.get('numerKRS') or dane.get('krs') or ''
+    profile_url = (
+        f"https://ekrs.ms.gov.pl/web/wyszukiwarka-krs/strona-glowna?numer={krs_num}"
+        if krs_num else ''
+    )
+    return {
+        'name': name,
+        'formatted_address': address,
+        'formatted_phone_number': '',
+        'website': website,
+        'profile_url': profile_url,
+        'emails': [email] if email else [],
+        '_krs_num': krs_num,  # tymczasowe pole — używane do enrichmentu, usuwane po merge
+    }
+
+
+def scrape_krs_api(query, location, session=None, max_results=100):
+    """Wyszukuje firmy przez api-rs.ms.gov.pl (search), a następnie wzbogaca
+    każdy wynik przez api-krs.ms.gov.pl/OdpisAktualny (lookup) — oficjalny endpoint
+    Ministerstwa Sprawiedliwości zwracający pełne dane: email, stronę, adres.
+
+    Strategia:
+      1. Wyszukaj po kodach PKD + miejscowość (api-rs.ms.gov.pl)
+      2. Fallback: wyszukaj po nazwie + miejscowość
+      3. Dla każdego wyniku z numerem KRS — pobierz OdpisAktualny i uzupełnij pola
+    """
+    session = session or create_session()
+    results = []
+    seen_krs = set()
+
+    category = map_query_to_category(query) or query.lower()
+    pkd_codes = KRS_PKD_MAP.get(category, [])
+    pkd_search_list = pkd_codes[:3]
+
+    def _fetch_search_page(params):
+        try:
+            resp = session.get(
+                f"{KRS_API_BASE}/v1/odpis",
+                params=params,
+                headers={'Accept': 'application/json'},
+                timeout=20,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            logger.debug("KRS search request failed: %s", e)
+            return None
+
+    def _collect_subjects(data):
+        if not data:
+            return []
+        if isinstance(data, list):
+            return data
+        return (data.get('lista') or data.get('wyniki') or
+                data.get('podmioty') or data.get('odpisy') or [])
+
+    def _add_result(parsed):
+        key = parsed['name'].lower()
+        if key in seen_krs:
+            return
+        seen_krs.add(key)
+
+        # Enrichment: jeśli mamy numer KRS, pobierz OdpisAktualny
+        krs_num = parsed.pop('_krs_num', '')
+        if krs_num:
+            aktualny = fetch_krs_aktualny(krs_num, session=session)
+            if aktualny:
+                # Uzupełnij puste pola pełniejszymi danymi z OdpisAktualny
+                if aktualny.get('name') and not parsed.get('name'):
+                    parsed['name'] = aktualny['name']
+                if aktualny.get('formatted_address') and not parsed.get('formatted_address'):
+                    parsed['formatted_address'] = aktualny['formatted_address']
+                if aktualny.get('formatted_phone_number'):
+                    parsed['formatted_phone_number'] = aktualny['formatted_phone_number']
+                if aktualny.get('website') and not parsed.get('website'):
+                    parsed['website'] = aktualny['website']
+                # Merge emails (OdpisAktualny jako pierwsze — oficjalne źródło)
+                new_emails = aktualny.get('emails') or []
+                existing  = parsed.get('emails') or []
+                merged_emails = new_emails + [e for e in existing if e not in new_emails]
+                parsed['emails'] = list(dict.fromkeys(merged_emails))
+                time.sleep(0.3)
+
+        results.append(parsed)
+
+    # 1. Wyszukaj po kodach PKD
+    for pkd in pkd_search_list:
+        if len(results) >= max_results:
+            break
+        data = _fetch_search_page({
+            'rejestr': 'P',
+            'pkd': pkd,
+            'miejscowosc': location,
+            'maxWynikow': min(50, max_results - len(results)),
+            'strona': 1,
+        })
+        for subj in _collect_subjects(data):
+            if len(results) >= max_results:
+                break
+            parsed = _parse_krs_subject(subj)
+            if parsed:
+                _add_result(parsed)
+        time.sleep(0.5)
+
+    # 2. Fallback: wyszukaj po nazwie firmy
+    if len(results) < 10:
+        data = _fetch_search_page({
+            'rejestr': 'P',
+            'nazwa': query,
+            'miejscowosc': location,
+            'maxWynikow': min(50, max_results - len(results)),
+            'strona': 1,
+        })
+        for subj in _collect_subjects(data):
+            if len(results) >= max_results:
+                break
+            parsed = _parse_krs_subject(subj)
+            if parsed:
+                _add_result(parsed)
+
+    logger.info("KRS API: found %s records for '%s' in %s", len(results), query, location)
+    return results
+
+
+def enrich_with_krs(results, session=None):
+    """Post-processing: dla każdego rekordu z numerem KRS w profile_url — pobierz
+    OdpisAktualny i uzupełnij brakujące pola (email, strona, telefon, adres).
+
+    Wywołuj po merge_results(), przed zapisem do pliku.
+    Modyfikuje listę in-place, zwraca liczbę uzupełnionych rekordów.
+    """
+    if not results:
+        return 0
+    session = session or create_session()
+    enriched = 0
+
+    for r in results:
+        profile_url = r.get('profile_url', '')
+        krs_num = _extract_krs_number(profile_url)
+        if not krs_num:
+            continue
+
+        # Pomiń jeśli rekord ma już kompletne dane
+        has_email   = bool(r.get('emails'))
+        has_website = bool(r.get('website'))
+        has_phone   = bool(r.get('formatted_phone_number'))
+        if has_email and has_website and has_phone:
+            continue
+
+        aktualny = fetch_krs_aktualny(krs_num, session=session)
+        if not aktualny:
+            continue
+
+        changed = False
+        if not has_email and aktualny.get('emails'):
+            r['emails'] = aktualny['emails']
+            changed = True
+        if not has_website and aktualny.get('website'):
+            r['website'] = aktualny['website']
+            changed = True
+        if not has_phone and aktualny.get('formatted_phone_number'):
+            r['formatted_phone_number'] = aktualny['formatted_phone_number']
+            changed = True
+        if not r.get('formatted_address') and aktualny.get('formatted_address'):
+            r['formatted_address'] = aktualny['formatted_address']
+            changed = True
+
+        if changed:
+            enriched += 1
+            logger.info("KRS enrich: uzupełniono dane dla '%s' (KRS %s)", r.get('name', ''), krs_num)
+
+        time.sleep(0.3)
+
+    logger.info("KRS enrich: uzupełniono %s/%s rekordów", enriched, len(results))
+    return enriched
+
+
+# ---------------------------------------------------------------------------
+# Aleo.com — Polish B2B catalog with company profiles
+# ---------------------------------------------------------------------------
+
+def _aleo_category_slug(query):
+    """Map internal query/category to Aleo.com URL category segment."""
+    category = map_query_to_category(query) or query.lower()
+    mapping = {
+        "spa":         "uslugi-kosmetyczne-i-spa",
+        "wellness":    "uslugi-kosmetyczne-i-spa",
+        "masaz":       "uslugi-kosmetyczne-i-spa",
+        "fizjoterapia":"fizjoterapia-i-rehabilitacja",
+        "joga":        "sport-i-rekreacja",
+        "uroda":       "uslugi-kosmetyczne-i-spa",
+        "fryzjer":     "fryzjerstwo",
+        "hotel":       "hotele-i-noclegi",
+    }
+    return mapping.get(category, slugify(query))
+
+
+def scrape_aleo(query, location, session=None, max_pages=3):
+    """Scrape business listings from aleo.com — a Polish B2B catalog.
+
+    Aleo profiles often include direct email addresses visible in static HTML.
+    Install: no extra dependencies.
+    """
+    session = session or create_cffi_session()
+    results = []
+    seen = set()
+    category_slug = _aleo_category_slug(query)
+    city_slug = slugify(location)
+
+    for page in range(1, max_pages + 1):
+        if city_slug:
+            url = f"{ALEO_BASE}/pl/firmy/{category_slug}/{city_slug}/?strona={page}"
+        else:
+            url = f"{ALEO_BASE}/pl/firmy/{category_slug}/?strona={page}"
+
+        try:
+            resp = session.get(url, headers={'User-Agent': get_random_user_agent()}, timeout=20)
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, 'lxml')
+
+            # Aleo company cards — selector may vary; try several
+            cards = (soup.select('div.company-item') or
+                     soup.select('article.company-card') or
+                     soup.select('div[class*="company"]') or
+                     soup.select('li.search-result'))
+            if not cards:
+                logger.info("Aleo: no cards on page %s (url=%s)", page, url)
+                break
+
+            for card in cards:
+                try:
+                    name_el = (card.select_one('h2 a') or card.select_one('h3 a') or
+                               card.select_one('a.company-name') or card.select_one('a[class*="name"]'))
+                    if not name_el:
+                        continue
+                    name = name_el.get_text(strip=True)
+                    if not name:
+                        continue
+
+                    profile_href = name_el.get('href', '')
+                    profile_url = profile_href if profile_href.startswith('http') else (ALEO_BASE + profile_href)
+
+                    address_el = card.select_one('address') or card.select_one('[class*="address"]')
+                    address = address_el.get_text(separator=' ', strip=True) if address_el else ''
+
+                    phone_el = card.select_one('a[href^="tel:"]') or card.select_one('[class*="phone"]')
+                    phone = ''
+                    if phone_el:
+                        phone = phone_el.get('href', '').replace('tel:', '').strip() or phone_el.get_text(strip=True)
+
+                    website_el = card.select_one('a[href^="http"]:not([href*="aleo.com"])')
+                    website = website_el.get('href', '') if website_el else ''
+
+                    # Direct email in card (sometimes visible)
+                    email_el = card.select_one('a[href^="mailto:"]')
+                    emails = []
+                    if email_el:
+                        emails = [email_el.get('href', '').replace('mailto:', '').strip()]
+
+                    key = name.lower()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+
+                    results.append({
+                        'name': name,
+                        'formatted_address': address,
+                        'formatted_phone_number': phone,
+                        'website': website,
+                        'profile_url': profile_url,
+                        'emails': emails,
+                    })
+                except Exception as e:
+                    logger.debug("Aleo: error parsing card: %s", e)
+
+            logger.info("Aleo: page %s — %s results so far", page, len(results))
+            time.sleep(random.uniform(1.5, 3.0))
+
+        except Exception as e:
+            logger.warning("Aleo: error fetching %s: %s", url, e)
+            break
+
+    return results
+
 
 def search_places(query, location, session=None):
     """Searches for places using Google Places API."""
@@ -2033,6 +2627,19 @@ def get_sitemap_urls(base_url, session=None, limit=10):
         return []
 
 
+def _deobfuscate_emails(text):
+    """Convert obfuscated email formats to standard @ notation."""
+    # kontakt [at] firma [dot] pl  ->  kontakt@firma.pl
+    text = re.sub(r'\s*\[at\]\s*', '@', text, flags=re.IGNORECASE)
+    text = re.sub(r'\s*\(at\)\s*', '@', text, flags=re.IGNORECASE)
+    text = re.sub(r'\s*\[dot\]\s*', '.', text, flags=re.IGNORECASE)
+    text = re.sub(r'\s*\(dot\)\s*', '.', text, flags=re.IGNORECASE)
+    # kontakt AT firma DOT pl  (standalone words only)
+    text = re.sub(r'(?<=[A-Za-z0-9])\s+AT\s+(?=[A-Za-z0-9])', '@', text)
+    text = re.sub(r'(?<=[A-Za-z0-9])\s+DOT\s+(?=[A-Za-z0-9])', '.', text)
+    return text
+
+
 def extract_emails_from_website(url, session=None, cache_conn=None, respect_robots=False, use_headless=False, headless_wait=3):
     """Extracts email addresses from a website."""
     if not url:
@@ -2070,9 +2677,12 @@ def extract_emails_from_website(url, session=None, cache_conn=None, respect_robo
             logger.info("Skipping non-HTML content: %s", content_type)
             return []
         
+        # Decode obfuscated emails before regex matching
+        raw_text = _deobfuscate_emails(response.text)
+
         # Use regex to find email addresses
         email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,7}\b' # Updated TLD length
-        emails = re.findall(email_pattern, response.text)
+        emails = re.findall(email_pattern, raw_text)
         
         # Also, get emails from contact pages if available
         soup = BeautifulSoup(response.text, 'html.parser')
@@ -2105,7 +2715,7 @@ def extract_emails_from_website(url, session=None, cache_conn=None, respect_robo
                     continue
                 contact_response = session.get(contact_url, headers={'User-Agent': get_random_user_agent()}, timeout=10, allow_redirects=True)
                 contact_response.raise_for_status()
-                contact_emails = re.findall(email_pattern, contact_response.text)
+                contact_emails = re.findall(email_pattern, _deobfuscate_emails(contact_response.text))
                 emails.extend(contact_emails)
             except Exception as e:
                 logger.warning("Could not fetch contact page %s: %s", contact_url, e)
@@ -2119,7 +2729,7 @@ def extract_emails_from_website(url, session=None, cache_conn=None, respect_robo
                         continue
                     resp = session.get(sitemap_url, headers={'User-Agent': get_random_user_agent()}, timeout=10, allow_redirects=True)
                     resp.raise_for_status()
-                    emails.extend(re.findall(email_pattern, resp.text))
+                    emails.extend(re.findall(email_pattern, _deobfuscate_emails(resp.text)))
                 except Exception:
                     continue
 
@@ -2129,7 +2739,7 @@ def extract_emails_from_website(url, session=None, cache_conn=None, respect_robo
             if not rendered:
                 rendered = get_rendered_html(url, wait_seconds=headless_wait, timeout=20)
             if rendered:
-                emails.extend(re.findall(email_pattern, rendered))
+                emails.extend(re.findall(email_pattern, _deobfuscate_emails(rendered)))
                 rendered_soup = BeautifulSoup(rendered, 'html.parser')
                 rendered_links = []
                 base_domain = '{uri.scheme}://{uri.netloc}'.format(uri=urlparse(url))
@@ -2151,7 +2761,7 @@ def extract_emails_from_website(url, session=None, cache_conn=None, respect_robo
                             continue
                         contact_response = session.get(contact_url, headers={'User-Agent': get_random_user_agent()}, timeout=10, allow_redirects=True)
                         contact_response.raise_for_status()
-                        contact_emails = re.findall(email_pattern, contact_response.text)
+                        contact_emails = re.findall(email_pattern, _deobfuscate_emails(contact_response.text))
                         emails.extend(contact_emails)
                     except Exception:
                         pass
@@ -2270,11 +2880,11 @@ def save_to_excel(data, filename=OUTPUT_FILE, city=None, append=False):
     ensure email2/email3 columns exist (hidden).
     """
     try:
-        template_path = os.path.join('scraped', 'IdeaMusicLeads.xlsx')
+        template_path = os.path.join(OUTPUT_DIR, 'IdeaMusicLeads.xlsx')
         target_basename = os.path.basename(filename or '')
 
         # Validate provided filename. If invalid, fallback to template (if exists) or
-        # a safe default in the scraped folder to avoid writing to root like "\\.xlsx".
+        # a safe default in the output folder to avoid writing to root like "\\.xlsx".
         try:
             bad_name = False
             if not filename or not isinstance(filename, str):
@@ -2289,13 +2899,13 @@ def save_to_excel(data, filename=OUTPUT_FILE, city=None, append=False):
                 if os.path.exists(template_path):
                     filename = template_path
                 else:
-                    os.makedirs('scraped', exist_ok=True)
-                    filename = os.path.join('scraped', 'results.xlsx')
+                    os.makedirs(OUTPUT_DIR, exist_ok=True)
+                    filename = os.path.join(OUTPUT_DIR, 'results.xlsx')
                 logger.warning("Invalid output filename provided; using fallback: %s", filename)
         except Exception:
             # If validation itself fails for any reason, ensure a safe fallback
-            os.makedirs('scraped', exist_ok=True)
-            filename = os.path.join('scraped', 'results.xlsx')
+            os.makedirs(OUTPUT_DIR, exist_ok=True)
+            filename = os.path.join(OUTPUT_DIR, 'results.xlsx')
             logger.warning("Error validating output filename; using fallback: %s", filename)
 
         # If we're updating the live IdeaMusicLeads.xlsx, open and append
@@ -2808,9 +3418,9 @@ def save_to_excel(data, filename=OUTPUT_FILE, city=None, append=False):
             logger.error("Error saving to Excel (attempted file: %s): %s", filename, e)
         except Exception:
             logger.error("Error saving to Excel: %s", e)
-        # Try to save to a safe fallback (template if available, otherwise scraped/results.xlsx)
+        # Try to save to a safe fallback (template if available, otherwise Data/Raport/results.xlsx)
         try:
-            fallback = template_path if os.path.exists(template_path) else os.path.join('scraped', 'results.xlsx')
+            fallback = template_path if os.path.exists(template_path) else os.path.join(OUTPUT_DIR, 'results.xlsx')
             os.makedirs(os.path.dirname(fallback), exist_ok=True)
             if 'wb' in locals():
                 wb.save(fallback)
@@ -2929,7 +3539,7 @@ def main():
         
         # 1. Choose Industry
         print("\nKROK 1/3: Wybierz branżę")
-        known_industries = ["spa", "wellness", "joga", "fizjoterapia"]
+        known_industries = ["spa", "wellness", "joga", "fizjoterapia", "uroda", "fryzjer", "hotel"]
         industry_labels = {
             "spa": "SPA / Masaż / Kobido",
             "wellness": "Wellness",
@@ -3061,7 +3671,7 @@ def main():
         output_path = ensure_output_path(args.output, args.format)
 
     # If the chosen output is the standard template, ask whether to append to it
-    template_path = os.path.join('scraped', 'IdeaMusicLeads.xlsx')
+    template_path = os.path.join(OUTPUT_DIR, 'IdeaMusicLeads.xlsx')
     append_to_template = False
 
     if os.path.exists(template_path) and os.path.abspath(output_path) == os.path.abspath(template_path):
@@ -3101,18 +3711,26 @@ def main():
     all_oferteo_results = []
     all_firmynet_results = []
     all_biznesfinder_results = []
+    all_krs_results = []
+    all_aleo_results = []
     
     session = create_session()
     cache_conn = setup_cache(args.cache_db) if scrape_emails_choice else None
 
     # Fetch data from Panorama Firm (always)
     logger.info("=== Fetching data from Panorama Firm ===")
-    all_panorama_results = scrape_panorama_firm(normalized_query, location, max_pages=args.max_pages, session=session)
+    all_panorama_results = scrape_panorama_firm(
+        normalized_query, location, max_pages=args.max_pages, session=session,
+        use_headless=args.use_headless
+    )
     annotate_sources(all_panorama_results, 'panoramafirm')
-    
+
     # Fetch data from PKT.pl (always)
     logger.info("=== Fetching data from PKT.pl ===")
-    all_pkt_results = scrape_pkt_pl(normalized_query, location, max_pages=args.max_pages, session=session)
+    all_pkt_results = scrape_pkt_pl(
+        normalized_query, location, max_pages=args.max_pages, session=session,
+        use_headless=args.use_headless
+    )
     annotate_sources(all_pkt_results, 'pkt')
 
     # Fetch data from Booksy (optional)
@@ -3202,7 +3820,17 @@ def main():
         headless_wait=args.headless_wait
     )
     annotate_sources(all_fixly_results, 'fixly')
-    
+
+    # Fetch data from KRS API (free government API, no anti-bot)
+    logger.info("=== Fetching data from KRS API ===")
+    all_krs_results = scrape_krs_api(normalized_query, location, session=session)
+    annotate_sources(all_krs_results, 'krs')
+
+    # Fetch data from Aleo.com (Polish B2B catalog)
+    logger.info("=== Fetching data from Aleo.com ===")
+    all_aleo_results = scrape_aleo(normalized_query, location, session=session, max_pages=args.max_pages)
+    annotate_sources(all_aleo_results, 'aleo')
+
     # Fetch data from Google Places (optional)
     if use_google_choice and API_KEY:
         logger.info("=== Fetching data from Google Places API ===")
@@ -3269,7 +3897,16 @@ def main():
         all_results = merge_results(all_results, all_znanylekarz_results)
     if all_fixly_results:
         all_results = merge_results(all_results, all_fixly_results)
+    if all_krs_results:
+        all_results = merge_results(all_results, all_krs_results)
+    if all_aleo_results:
+        all_results = merge_results(all_results, all_aleo_results)
     logger.info("After deduplication, we have %s unique businesses.", len(all_results))
+
+    # KRS enrichment: uzupełnij brakujące pola dla rekordów z numerem KRS w profile_url
+    # Działa dla wyników z każdego źródła (Panorama, PKT, Aleo, KRS search, itp.)
+    logger.info("=== KRS enrichment (OdpisAktualny) ===")
+    enrich_with_krs(all_results, session=session)
     
     # If user wants emails, fetch them for each business with a website URL
     if scrape_emails_choice:
