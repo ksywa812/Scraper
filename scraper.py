@@ -4325,6 +4325,16 @@ def main():
         all_results = merge_results(all_results, all_aleo_results)
     logger.info("After deduplication, we have %s unique businesses.", len(all_results))
 
+    # Filter out records whose name contains the word "auto" (e.g. "auto spa", "auto - spa")
+    before_auto_filter = len(all_results)
+    all_results = [
+        r for r in all_results
+        if not re.search(r'\bauto\b', r.get('name', ''), re.IGNORECASE)
+    ]
+    filtered_auto = before_auto_filter - len(all_results)
+    if filtered_auto:
+        logger.info("Filtered out %s records containing 'auto' in name.", filtered_auto)
+
     # KRS enrichment: uzupełnij brakujące pola dla rekordów z numerem KRS w profile_url
     # Działa dla wyników z każdego źródła (Panorama, PKT, Aleo, KRS search, itp.)
     logger.info("=== KRS enrichment (OdpisAktualny) ===")
