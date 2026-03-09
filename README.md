@@ -127,13 +127,13 @@ python -m venv .venv
 # install deps (first run)
 pip install -r requirements.txt
 # run (the script will prompt if saving to the template file)
-python scraper.py --output data/processed/IdeaMusicLeads.xlsx
+python scraper.py --output data/processed/SoundYouLeads.xlsx
 ```
 
 CMD:
 ```cmd
 .venv\Scripts\activate.bat
-python scraper.py --output scraped/IdeaMusicLeads.xlsx
+python scraper.py --output scraped/SoundYouLeads.xlsx
 ```
 
 You can also simply launch the helper batch file which prefers the `.venv` Python if available:
@@ -141,8 +141,8 @@ You can also simply launch the helper batch file which prefers the `.venv` Pytho
 .\run_scraper.bat
 ```
 
-Note: if the output file is `data/processed/IdeaMusicLeads.xlsx` and it already exists, the script will ask:
-`Plik data\processed\IdeaMusicLeads.xlsx już istnieje. Dopisać do niego? (t/n):`
+Note: if the output file is `data/processed/SoundYouLeads.xlsx` and it already exists, the script will ask:
+`Plik data\processed\SoundYouLeads.xlsx już istnieje. Dopisać do niego? (t/n):`
 - answer `t` to merge/append into the template (updates existing rows and adds new ones);
 - answer `n` to be prompted for a new filename and create a separate file.
 

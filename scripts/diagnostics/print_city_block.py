@@ -6,7 +6,7 @@ from openpyxl import load_workbook
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 city = sys.argv[1] if len(sys.argv) > 1 else "Bydgoszcz"
-wb = load_workbook(PROJECT_ROOT / "Data" / "Raport" / "IdeaMusicLeads.xlsx")
+wb = load_workbook(PROJECT_ROOT / "Data" / "Raport" / "SoundYouLeads.xlsx")
 ws = wb[wb.sheetnames[0]]
 rows = list(ws.iter_rows(values_only=True))
 city_up = city.upper()

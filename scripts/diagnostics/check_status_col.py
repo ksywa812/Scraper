@@ -3,7 +3,7 @@ from pathlib import Path
 from openpyxl import load_workbook
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-p = PROJECT_ROOT / "Data" / "Raport" / "IdeaMusicLeads.xlsx"
+p = PROJECT_ROOT / "Data" / "Raport" / "SoundYouLeads.xlsx"
 wb = load_workbook(p)
 s = wb[wb.sheetnames[0]]
 headers = [cell.value for cell in next(s.iter_rows(min_row=1, max_row=1))]

@@ -3098,7 +3098,7 @@ def _rebuild_branza_sheets(wb, template_path):
 
     Reads all data rows from 'Wszystkie', groups them by Branża, then
     recreates each branża sheet with city-header rows (dark blue) and data rows.
-    Called after every save to IdeaMusicLeads.xlsx.
+    Called after every save to SoundYouLeads.xlsx.
     """
     from collections import defaultdict
     from openpyxl.styles import PatternFill, Font, Alignment
@@ -3199,7 +3199,7 @@ def save_to_excel(data, filename=OUTPUT_FILE, city=None, append=False):
     ensure email2/email3 columns exist (hidden).
     """
     try:
-        template_path = os.path.join(OUTPUT_DIR, 'IdeaMusicLeads.xlsx')
+        template_path = os.path.join(OUTPUT_DIR, 'SoundYouLeads.xlsx')
         target_basename = os.path.basename(filename or '')
 
         # Validate provided filename. If invalid, fallback to template (if exists) or
@@ -3227,7 +3227,7 @@ def save_to_excel(data, filename=OUTPUT_FILE, city=None, append=False):
             filename = os.path.join(OUTPUT_DIR, 'results.xlsx')
             logger.warning("Error validating output filename; using fallback: %s", filename)
 
-        # If we're updating the live IdeaMusicLeads.xlsx, open and append
+        # If we're updating the live SoundYouLeads.xlsx, open and append
         if os.path.exists(template_path) and target_basename.lower() == os.path.basename(template_path).lower():
             wb = openpyxl.load_workbook(template_path)
 
@@ -4092,9 +4092,9 @@ def main():
 
     scrape_emails_choice = True
 
-    template_path = os.path.join(OUTPUT_DIR, 'IdeaMusicLeads.xlsx')
+    template_path = os.path.join(OUTPUT_DIR, 'SoundYouLeads.xlsx')
 
-    # Dual-save mode (default): per-run archive + auto-append to master IdeaMusicLeads.xlsx.
+    # Dual-save mode (default): per-run archive + auto-append to master SoundYouLeads.xlsx.
     # When --output is set to a custom file, fall back to single-file behavior.
     custom_output = (args.output != OUTPUT_FILE)
 
@@ -4403,7 +4403,7 @@ def main():
             logger.info("Appended %d records to master: %s", len(all_results), template_path)
         else:
             save_results(all_results, output_path, args.format, city=location, append_to_template=append_to_template)
-        csv_master_path = os.path.join(OUTPUT_DIR, 'IdeaMusicLeads.csv')
+        csv_master_path = os.path.join(OUTPUT_DIR, 'SoundYouLeads.csv')
         append_to_csv_master(all_results, csv_master_path)
         logger.info("Appended %d records to CSV master: %s", len(all_results), csv_master_path)
     else:

@@ -17,7 +17,7 @@ item = {
 
 save_to_excel(
     [item],
-    filename=os.path.join("Data", "Raport", "IdeaMusicLeads.xlsx"),
+    filename=os.path.join("Data", "Raport", "SoundYouLeads.xlsx"),
     city="Bydgoszcz",
     append=True,
 )
