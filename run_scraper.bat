@@ -1,4 +1,5 @@
 @echo off
+setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
 set "VENV_PY=%~dp0.venv\Scripts\python.exe"
@@ -47,29 +48,29 @@ if "%MODE%"=="2" (
     echo.
     set /p AGLO="Wybierz aglomeracje [1-5]: "
 
-    if "%AGLO%"=="1" set CITIES=Wroclaw Swidnica Olawa "Jelcz-Laskowice" Olesnica Trzebnica "Sroda Slaska" Kobierzyce Dlugoleka
-    if "%AGLO%"=="2" set CITIES=Warszawa Piaseczno Pruszkow Legionowo Wolomin Marki Lomianki Jozefow Otwock
-    if "%AGLO%"=="3" set CITIES=Krakow Wieliczka Niepolomice Skawina Krzeszowice Myslowice Chrzanow
-    if "%AGLO%"=="4" set CITIES=Gdansk Gdynia Sopot Rumia Reda Wejherowo Pruszcz-Gdanski
-    if "%AGLO%"=="5" (
+    if "!AGLO!"=="1" set CITIES=Wroclaw Swidnica Olawa "Jelcz-Laskowice" Olesnica Trzebnica "Sroda Slaska" Kobierzyce Dlugoleka
+    if "!AGLO!"=="2" set CITIES=Warszawa Piaseczno Pruszkow Legionowo Wolomin Marki Lomianki Jozefow Otwock
+    if "!AGLO!"=="3" set CITIES=Krakow Wieliczka Niepolomice Skawina Krzeszowice Myslowice Chrzanow
+    if "!AGLO!"=="4" set CITIES=Gdansk Gdynia Sopot Rumia Reda Wejherowo Pruszcz-Gdanski
+    if "!AGLO!"=="5" (
         echo  Wpisz miasta oddzielone spacjami (miasta wieloczlonowe w cudzyslowie):
         set /p CITIES="Miasta: "
     )
 
     echo.
     echo ============================================================
-    echo  Aglomeracja — branza: %QUERY%
-    echo  Miasta: %CITIES%
+    echo  Aglomeracja — branza: !QUERY!
+    echo  Miasta: !CITIES!
     echo ============================================================
 
     set FAILED=0
-    for %%C in (%CITIES%) do (
+    for %%C in (!CITIES!) do (
         echo.
         echo  --- Scrapowanie: %%C ---
         if exist "%VENV_PY%" (
-            "%VENV_PY%" scraper.py --query %QUERY% --location %%C --emails --use-google --output Data/Raport/SoundYouLeads.xlsx
+            "%VENV_PY%" scraper.py --query !QUERY! --location "%%C" --emails --use-google --output Data/Raport/SoundYouLeads.xlsx
         ) else (
-            py scraper.py --query %QUERY% --location %%C --emails --use-google --output Data/Raport/SoundYouLeads.xlsx
+            py scraper.py --query !QUERY! --location "%%C" --emails --use-google --output Data/Raport/SoundYouLeads.xlsx
         )
         if errorlevel 1 (
             echo [WARN] Blad dla miasta %%C — kontynuuje...
@@ -77,7 +78,7 @@ if "%MODE%"=="2" (
         )
     )
     echo.
-    echo  Miasta zakonczone. Bledy: %FAILED%
+    echo  Miasta zakonczone. Bledy: !FAILED!
     goto RESEND
 )
 
