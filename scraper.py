@@ -191,6 +191,24 @@ def extract_external_website_from_profile(profile_url, session=None, skip_domain
     return ""
 
 
+_HOTEL_KEYWORDS = [
+    "hotel", "resort", "pensjonat", "aparthotel", "motel", "hostel",
+    "lodge", "inn", "manor", "dworek", "palace",
+]
+
+_HOTEL_KEYWORD_RE = re.compile(
+    r'\b(' + '|'.join(re.escape(k) for k in _HOTEL_KEYWORDS) + r')\b',
+    re.IGNORECASE,
+)
+
+
+def _is_hotel_record(record):
+    """Zwraca True jeśli rekord to hotel/resort mimo że trafił do kategorii spa/beauty/masaż."""
+    name = record.get('name') or ''
+    website = record.get('website') or ''
+    return bool(_HOTEL_KEYWORD_RE.search(name) or _HOTEL_KEYWORD_RE.search(website))
+
+
 CATEGORY_KEYWORDS = {
     "spa": [
         "spa", "day spa", "spa & wellness", "rytual spa", "rytuał spa", "salon spa",
@@ -3106,6 +3124,7 @@ def _rebuild_branza_sheets(wb, template_path):
     KNOWN_BRANZE = {
         "spa": "Spa", "joga": "Joga", "fizjoterapia": "Fizjoterapia",
         "uroda": "Uroda", "fryzjer": "Fryzjer", "hotel": "Hotel",
+        "hotel-spa": "Hotel-Spa",
         "restaurant": "Restaurant", "masaz": "Masaż", "masaż": "Masaż",
     }
 
@@ -3146,7 +3165,7 @@ def _rebuild_branza_sheets(wb, template_path):
     header_font = Font(color='FFFFFF', bold=True)
     header_align = Alignment(horizontal='center')
 
-    sheet_order = ['Spa', 'Joga', 'Fizjoterapia', 'Uroda', 'Fryzjer', 'Masaż', 'Hotel', 'Restaurant', 'Inne']
+    sheet_order = ['Spa', 'Joga', 'Fizjoterapia', 'Uroda', 'Fryzjer', 'Masaż', 'Hotel', 'Hotel-Spa', 'Restaurant', 'Inne']
 
     for sheet_name, rows in branza_groups.items():
         # Remove existing sheet and recreate
@@ -3194,7 +3213,7 @@ def _rebuild_branza_sheets(wb, template_path):
 
 
 def save_to_excel(data, filename=OUTPUT_FILE, city=None, append=False):
-    """Saves data to an Excel file. If target is the IdeaMusicLeads template, append into it
+    """Saves data to an Excel file. If target is the SoundYouLeads template, append into it
     and preserve layout/style, insert a colored city header row, set Status='to call', and
     ensure email2/email3 columns exist (hidden).
     """
@@ -3233,7 +3252,7 @@ def save_to_excel(data, filename=OUTPUT_FILE, city=None, append=False):
 
             # Ensure main sheet is named "Wszystkie"
             first_sheet = wb[wb.sheetnames[0]]
-            _branża_sheet_names = {'Spa', 'Joga', 'Fizjoterapia', 'Uroda', 'Fryzjer', 'Masaż', 'Hotel', 'Restaurant', 'Inne'}
+            _branża_sheet_names = {'Spa', 'Joga', 'Fizjoterapia', 'Uroda', 'Fryzjer', 'Masaż', 'Hotel', 'Hotel-Spa', 'Restaurant', 'Inne'}
             if first_sheet.title not in ({'Wszystkie'} | _branża_sheet_names):
                 first_sheet.title = 'Wszystkie'
             if 'Wszystkie' not in wb.sheetnames:
@@ -4383,26 +4402,34 @@ def main():
                     result['website'] = external
             if website:
                 processed_websites += 1
-                logger.info("[%s/%s] Fetching emails for: %s", processed_websites, total_with_website, result.get('name', 'Unknown Name'))
                 existing_emails = result.get('emails') or []
-                emails = extract_emails_from_website(
-                    website,
-                    session=session,
-                    cache_conn=cache_conn,
-                    respect_robots=args.respect_robots,
-                    use_headless=args.use_headless,
-                    headless_wait=args.headless_wait
-                )
-                merged = list(dict.fromkeys([e for e in (existing_emails + emails) if e]))
-                result['emails'] = merged
-                # Delay to avoid overloading servers
-                time.sleep(random.uniform(1.0, 2.0))
+                if existing_emails:
+                    logger.info("[%s/%s] Skipping website scrape (emails already known): %s", processed_websites, total_with_website, result.get('name', 'Unknown Name'))
+                else:
+                    logger.info("[%s/%s] Fetching emails for: %s", processed_websites, total_with_website, result.get('name', 'Unknown Name'))
+                    emails = extract_emails_from_website(
+                        website,
+                        session=session,
+                        cache_conn=cache_conn,
+                        respect_robots=args.respect_robots,
+                        use_headless=args.use_headless,
+                        headless_wait=args.headless_wait
+                    )
+                    result['emails'] = list(dict.fromkeys([e for e in emails if e]))
+                    # Delay to avoid overloading servers
+                    time.sleep(random.uniform(1.0, 2.0))
     
     # Inject metadata into every record before saving
     for _r in all_results:
         _r.setdefault('branża', query)
         _r.setdefault('miasto', location)
         _r.setdefault('województwo', selected_voivodeship)
+
+    # Reklasyfikacja: hotele, które trafiły do wyników spa/wellness/beauty/masaż
+    _SPA_LIKE = {"spa", "uroda", "fryzjer", "masaz", "masaż", "wellness", "fizjoterapia", "joga"}
+    for _r in all_results:
+        if _r.get('branża', '').lower() in _SPA_LIKE and _is_hotel_record(_r):
+            _r['branża'] = 'hotel-spa'
 
     # Save all data
     if all_results:
