@@ -33,10 +33,14 @@ RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
 RESEND_AUDIENCE_ID = os.getenv("RESEND_AUDIENCE_ID", "")
 API_BASE = "https://api.resend.com"
 
+USERCHECK_API_KEY = os.getenv("USERCHECK_API_KEY", "")
+USERCHECK_API_BASE = "https://api.usercheck.com"
+
 EMAIL_COLUMNS = ["Email 1", "Email 2", "Email 3"]
 NAME_COLUMN = "Name"
 DATA_DIR = Path(__file__).parent / "data" / "Raport"
 SENT_LOG_PATH = DATA_DIR / "sent_log.json"
+VERIFY_CACHE_PATH = DATA_DIR / "email_verify_cache.json"
 
 EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -147,6 +151,103 @@ def load_contacts(csv_path: Path) -> list[dict]:
     print(f"  Nieprawidłowych emaili: {invalid_count}")
     print(f"  Unikalnych kontaktów do importu: {len(contacts)}")
     return contacts
+
+
+# ── UserCheck — weryfikacja emaili ────────────────────────────────────────────
+
+
+def load_verify_cache() -> dict:
+    if not VERIFY_CACHE_PATH.exists():
+        return {}
+    try:
+        return json.loads(VERIFY_CACHE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_verify_cache(cache: dict) -> None:
+    VERIFY_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    VERIFY_CACHE_PATH.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def verify_email(email: str) -> tuple[bool, str]:
+    """
+    Odpytuje UserCheck API dla pojedynczego emaila.
+    Zwraca (True, "") jeśli OK, lub (False, reason) jeśli adres jest zły.
+    Sprawdza: brak MX, disposable, blocklisted, spam.
+    """
+    url = f"{USERCHECK_API_BASE}/email/{email}"
+    headers = {"Authorization": f"Bearer {USERCHECK_API_KEY}"}
+    delay = 2.0
+    for attempt in range(3):
+        try:
+            resp = requests.get(url, headers=headers, timeout=10)
+        except requests.RequestException as e:
+            return True, f"network_error: {e}"  # przy błędzie sieci przepuść email
+
+        if resp.status_code == 429:
+            time.sleep(delay)
+            delay *= 2
+            continue
+        if resp.status_code != 200:
+            return True, ""  # przy nieoczekiwanym błędzie API przepuść email
+
+        data = resp.json()
+        if not data.get("mx", True):
+            return False, "no_mx"
+        if data.get("disposable"):
+            return False, "disposable"
+        if data.get("blocklisted"):
+            return False, "blocklisted"
+        if data.get("spam"):
+            return False, "spam"
+        return True, ""
+
+    return True, ""  # po wyczerpaniu prób przepuść
+
+
+def filter_verified_contacts(contacts: list[dict]) -> list[dict]:
+    """
+    Weryfikuje każdy email przez UserCheck API (z lokalnym cache).
+    Filtruje adresy bez MX, disposable, blocklisted i spam.
+    """
+    cache = load_verify_cache()
+    good: list[dict] = []
+    bad: list[tuple[str, str]] = []
+    from_cache = 0
+
+    print(f"  Weryfikacja emaili przez UserCheck ({len(contacts)} adresów)…")
+
+    for i, c in enumerate(contacts, 1):
+        email = c["email"]
+        if email in cache:
+            ok = cache[email]["ok"]
+            reason = cache[email]["reason"]
+            from_cache += 1
+        else:
+            ok, reason = verify_email(email)
+            cache[email] = {
+                "ok": ok,
+                "reason": reason,
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }
+            time.sleep(1.1)  # 1 req/sek — limit free tier
+
+        if ok:
+            good.append(c)
+        else:
+            bad.append((email, reason))
+
+        if i % 50 == 0:
+            print(f"    Postęp: {i}/{len(contacts)} (cache: {from_cache})")
+
+    save_verify_cache(cache)
+
+    print(f"  Wynik: {len(good)} OK, {len(bad)} odfiltrowanych (z cache: {from_cache})")
+    for email, reason in bad:
+        print(f"    [SKIP] {email}  ({reason})")
+
+    return good
 
 
 # ── Resend API ────────────────────────────────────────────────────────────────
@@ -453,6 +554,8 @@ def main() -> None:
                         help="Temat emaila (tryb campaign)")
     parser.add_argument("--template", type=Path,
                         help="Ścieżka do szablonu HTML (tryb campaign), np. data/templates/outreach_ideamusic.html")
+    parser.add_argument("--skip-verify", action="store_true",
+                        help="Pomiń weryfikację emaili przez UserCheck API")
     args = parser.parse_args()
 
     validate_config()
@@ -530,6 +633,13 @@ def main() -> None:
         except Exception:
             for c in contacts:
                 c["city"] = ""
+
+        if USERCHECK_API_KEY and not args.skip_verify:
+            contacts = filter_verified_contacts(contacts)
+        elif args.skip_verify:
+            print("  [INFO] Weryfikacja UserCheck pominięta (--skip-verify).")
+        else:
+            print("  [INFO] Brak USERCHECK_API_KEY — pomijam weryfikację emaili.")
 
         print(f"\nRozpoczynam wysyłkę kampanii do {len(contacts)} odbiorców…")
         print(f"From:     {args.from_email}")
