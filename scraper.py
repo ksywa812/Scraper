@@ -99,6 +99,52 @@ POLISH_CHAR_MAP = {
     'ż': 'z', 'Ż': 'Z',
 }
 
+# Centralny, poprawny wzorzec e-mail (zamiast trzech różnych błędnych wersji w pliku)
+# Poprawka: [A-Z|a-z] → [A-Za-z], niedozwolone domeny z podwójną kropką, png/jpg w końcówce
+EMAIL_RE = re.compile(
+    r'\b[A-Za-z0-9._%+-]+'
+    r'@'
+    r'[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]'
+    r'\.'
+    r'[A-Za-z]{2,}\b'
+)
+
+_IMAGE_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.ico', '.bmp')
+
+
+def is_valid_email(email: str) -> bool:
+    """Zwraca True jeśli email jest poprawny (format + nie jest plikiem graficznym)."""
+    if not email or not isinstance(email, str):
+        return False
+    e = email.strip().lower()
+    if e.endswith(_IMAGE_EXTENSIONS):
+        return False
+    return bool(EMAIL_RE.match(email.strip()))
+
+
+# E-maile platform (Booksy, Fresha) — nie są kontaktami biznesowymi
+_PLATFORM_EMAILS = frozenset({
+    "aneksy@booksy.com", "pomoc.pl@booksy.com", "sprzedaz@booksy.com",
+    "info.pl@booksy.com", "reklamacje@booksy.com", "info@booksy.com",
+    "support@booksy.com", "hello@booksy.com",
+    "support@fresha.com", "no-reply@fresha.com", "hello@fresha.com",
+})
+
+
+def filter_platform_emails(emails):
+    """Usuwa e-maile platform (Booksy, Fresha) z listy kontaktów."""
+    return [e for e in emails if e.lower() not in _PLATFORM_EMAILS]
+
+
+def strip_emoji(text: str) -> str:
+    """Usuwa emoji i znaki specjalne z tekstu (zachowuje litery, cyfry, interpunkcję)."""
+    if not text:
+        return text
+    return ''.join(
+        c for c in text
+        if unicodedata.category(c) not in ('So', 'Sk', 'Sm', 'Cs')
+    )
+
 
 def strip_accents(text):
     # First, manually replace Polish chars that NFKD misses (especially ł)
@@ -194,6 +240,9 @@ def extract_external_website_from_profile(profile_url, session=None, skip_domain
 _HOTEL_KEYWORDS = [
     "hotel", "resort", "pensjonat", "aparthotel", "motel", "hostel",
     "lodge", "inn", "manor", "dworek", "palace",
+    # Znane sieci hotelowe (Bristol, Sheraton itp. bez słowa "hotel" w nazwie)
+    "sheraton", "marriott", "hilton", "radisson", "novotel", "ibis",
+    "bristol", "manor house", "health resort", "wellness resort", "spa resort",
 ]
 
 _HOTEL_KEYWORD_RE = re.compile(
@@ -284,11 +333,16 @@ def category_keywords_for_query(query):
 
 def znanylekarz_path_for_query(query):
     category = map_query_to_category(query)
-    if category == "masaz":
-        return "uslugi-zabiegi/masaz"
-    if category == "fizjoterapia":
-        return "fizjoterapeuta"
-    return None
+    _ZNANY_PATHS = {
+        "masaz": "uslugi-zabiegi/masaz",
+        "fizjoterapia": "fizjoterapeuta",
+        "spa": "uslugi-zabiegi/kosmetyka",
+        "uroda": "uslugi-zabiegi/kosmetyka",
+        "wellness": "uslugi-zabiegi/masaz",
+        "fryzjer": "fryzjer",
+        "joga": "uslugi-zabiegi/masaz",
+    }
+    return _ZNANY_PATHS.get(category)
 
 
 def fixly_path_for_query(query):
@@ -526,7 +580,7 @@ def _playwright_reveal_email(profile_url, timeout_ms=20000):
     except ImportError:
         return []
 
-    email_pattern = re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,7}\b')
+    email_pattern = EMAIL_RE
     # Selectors for the "show email" button across PKT and Panorama Firm
     reveal_selectors = [
         "span.call-text",          # PKT.pl
@@ -749,10 +803,11 @@ def extract_booksy_profile_data(profile_url, session=None):
             if phone_match:
                 result['phone'] = phone_match.group(1)
 
-            # Extract emails (skip booksy.com emails)
-            all_emails = re.findall(r'[\w.+-]+@[\w-]+\.[\w.]+', decoded)
+            # Extract emails — pomiń e-maile booksy.com i inne platformowe
+            all_emails = EMAIL_RE.findall(decoded)
             result['emails'] = list(dict.fromkeys(
-                e for e in all_emails if 'booksy.com' not in e.lower()
+                e for e in all_emails
+                if is_valid_email(e) and e.lower() not in _PLATFORM_EMAILS
             ))
             break  # Only process first __NUXT__ script
 
@@ -905,12 +960,12 @@ def scrape_booksy(query, location, max_pages=3, session=None):
             continue
         logger.info("Booksy: profile %s/%s  %s", idx, len(results), item.get('name', ''))
         profile_data = extract_booksy_profile_data(profile_url, session=session)
-        # Website
+        # Website — zachowaj profile_url jako fallback jeśli nie ma realnej strony
         if profile_data['website'] and not is_catalog_url(profile_data['website']):
             logger.info("Booksy:   → website: %s", profile_data['website'])
             item['website'] = profile_data['website']
         else:
-            item['website'] = ""
+            item['website'] = item.get('profile_url', '')
         # Emails
         if profile_data['emails']:
             logger.info("Booksy:   → emails: %s", ', '.join(profile_data['emails']))
@@ -1303,6 +1358,7 @@ def scrape_cylex(query, location, session=None, max_pages=3, use_headless=False,
                     if keywords and not any(k in text_blob for k in keywords):
                         continue
                     results.append(profile)
+                time.sleep(random.uniform(0.3, 0.8))
                 if len(seen_profiles) >= max_profiles:
                     break
 
@@ -1804,6 +1860,7 @@ def scrape_firmynet(query, location, session=None, max_pages=3, use_headless=Fal
             if keywords and not any(k in text_blob for k in keywords):
                 continue
             results.append(profile)
+        time.sleep(random.uniform(0.3, 0.8))
         if len(seen_profiles) >= max_profiles:
             break
 
@@ -1915,6 +1972,7 @@ def scrape_biznesfinder(query, location, session=None, max_pages=3, use_headless
             if keywords and not any(k in text_blob for k in keywords):
                 continue
             results.append(profile)
+        time.sleep(random.uniform(0.3, 0.8))
         if len(seen_profiles) >= max_profiles:
             break
 
@@ -1956,7 +2014,11 @@ def cache_set_emails(conn, url, emails):
 
 
 def normalize_phone(phone):
-    return re.sub(r"\D+", "", phone or "")
+    digits = re.sub(r'\D', '', phone or '')
+    # Normalizuj prefix +48 → usuń, żeby ten sam numer zawsze dawał ten sam klucz dedup
+    if digits.startswith('48') and len(digits) == 11:
+        digits = digits[2:]
+    return digits
 
 
 def normalize_name(name):
@@ -1996,12 +2058,17 @@ def scrape_panorama_firm(query, location, max_pages=3, session=None, use_headles
             response.raise_for_status() # Raise an exception for HTTP errors
             
             soup = BeautifulSoup(response.text, 'html.parser')
-            businesses = soup.select('div.card.company-item')
-            
+            businesses = (
+                soup.select('div.card.company-item')
+                or soup.select('article.company-card')
+                or soup.select('[data-company-id]')
+                or soup.select('div.company-item')
+            )
+
             if not businesses:
                 logger.info("No more results found on page %s", page)
                 break
-                
+
             for business in businesses:
                 try:
                     # Basic data
@@ -2086,12 +2153,17 @@ def scrape_pkt_pl(query, location, max_pages=3, session=None, use_headless=False
             response.raise_for_status()
             
             soup = BeautifulSoup(response.text, 'html.parser')
-            businesses = soup.select('li.list-items')
-            
+            businesses = (
+                soup.select('li.list-items')
+                or soup.select('div.result-item')
+                or soup.select('li[data-id]')
+                or soup.select('div.company-result')
+            )
+
             if not businesses:
                 logger.info("No more results found on page %s", page)
                 break
-                
+
             for business in businesses:
                 try:
                     # Basic data
@@ -2918,8 +2990,8 @@ def extract_emails_from_website(url, session=None, cache_conn=None, respect_robo
         raw_text = _deobfuscate_emails(response.text)
 
         # Use regex to find email addresses
-        email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,7}\b' # Updated TLD length
-        emails = re.findall(email_pattern, raw_text)
+        email_pattern = EMAIL_RE
+        emails = email_pattern.findall(raw_text)
         
         # Also, get emails from contact pages if available
         soup = BeautifulSoup(response.text, 'html.parser')
@@ -3010,13 +3082,19 @@ def extract_emails_from_website(url, session=None, cache_conn=None, respect_robo
                 emails.append(data_email)
         
         # Remove duplicates and filter emails
-        unique_emails = list(set(emails))
-        
-        # Filter out common generic or spammy domains
-        filtered_emails = [email for email in unique_emails if not any(
-            domain in email.lower() for domain in ['example.com', 'domain.com', 'yourmail.com', 'wixpress.com', 'sentry.io'] # Added more common spam/service domains
-        )]
-        
+        unique_emails = list(dict.fromkeys(emails))
+
+        # Filtruj: błędny format, pliki graficzne, e-maile platform, domeny testowe
+        filtered_emails = [
+            e for e in unique_emails
+            if is_valid_email(e)
+            and e.lower() not in _PLATFORM_EMAILS
+            and not any(
+                domain in e.lower()
+                for domain in ['example.com', 'domain.com', 'yourmail.com', 'wixpress.com', 'sentry.io']
+            )
+        ]
+
         logger.info("Found %s unique email addresses.", len(filtered_emails))
         if cache_conn is not None:
             cache_set_emails(cache_conn, url, filtered_emails)
@@ -3860,18 +3938,32 @@ def append_to_csv_master(data, csv_path):
         except Exception as e:
             logger.warning("Could not read existing CSV master %s: %s", csv_path, e)
 
+    def _is_junk_record(item):
+        name = item.get('name', '').strip()
+        if not name or len(name) < 3:
+            return True
+        # Wiersze zawierające tylko cyfry, ukośniki, przecinki — artefakty CSV
+        if re.search(r'^[\d,/\\@\s]+$', name):
+            return True
+        return False
+
     new_rows = []
     for item in data:
-        key = (_norm(item.get('name', '')), _norm(item.get('formatted_phone_number', '')))
+        if _is_junk_record(item):
+            logger.debug("Pominięto junk record: %r", item.get('name', ''))
+            continue
+        # Usuń emoji z nazwy przed zapisem
+        clean_name = strip_emoji(item.get('name', '')).strip()
+        key = (_norm(clean_name), _norm(item.get('formatted_phone_number', '')))
         if key in existing_keys or key == ('', ''):
             continue
         existing_keys.add(key)
-        emails = item.get('emails', [])
+        emails = [e for e in item.get('emails', []) if is_valid_email(e) and e.lower() not in _PLATFORM_EMAILS]
         new_rows.append({
             'Branża': item.get('branża', ''),
             'Województwo': item.get('województwo', ''),
             'Miasto': item.get('miasto', ''),
-            'Name': item.get('name', ''),
+            'Name': clean_name,
             'Address': item.get('formatted_address', ''),
             'Phone': item.get('formatted_phone_number', ''),
             'Website': item.get('website', ''),
@@ -3933,6 +4025,22 @@ def main():
     parser.add_argument("--no-headless", dest="use_headless", action="store_false", help="Disable headless browser")
     parser.add_argument("--headless-wait", type=int, default=3, help="Seconds to wait after render in headless mode")
     args = parser.parse_args()
+
+    # Walidacja: odrzuć argumenty wyglądające jak ścieżki pliku (artefakty bat/shell)
+    if args.query and is_probably_path(args.query):
+        parser.error(
+            f"--query wygląda jak ścieżka pliku: {args.query!r}\n"
+            "Podaj nazwę branży, np. 'spa' lub 'fryzjer'."
+        )
+    if args.location and is_probably_path(args.location):
+        parser.error(
+            f"--location wygląda jak ścieżka pliku: {args.location!r}\n"
+            "Podaj nazwę miasta, np. 'Katowice' lub 'Kraków'."
+        )
+    if args.query and len(args.query) > 120:
+        parser.error(f"--query jest za długi ({len(args.query)} znaków). Max 120.")
+    if args.location and len(args.location) > 120:
+        parser.error(f"--location jest za długi ({len(args.location)} znaków). Max 120.")
 
     # Variables to store interactive choices, defaults from args
     selected_query = args.query
@@ -4135,6 +4243,24 @@ def main():
     use_google_choice = True
     use_booksy_choice = True
 
+    # Wczesna walidacja klucza Google API — nie marnuj czasu na scrapowanie jeśli klucz jest zły
+    if use_google_choice and API_KEY:
+        try:
+            _test_resp = requests.get(
+                "https://maps.googleapis.com/maps/api/place/findplacefromtext/json",
+                params={"input": "test", "inputtype": "textquery", "key": API_KEY},
+                timeout=10
+            )
+            _test_status = _test_resp.json().get("status", "")
+            if _test_status == "REQUEST_DENIED":
+                logger.error(
+                    "GOOGLE API KEY NIEPRAWIDŁOWY (REQUEST_DENIED) — wyłączam Google Places. "
+                    "Sprawdź zmienną GOOGLE_MAPS_API_KEY w pliku .env"
+                )
+                use_google_choice = False
+        except Exception as _e:
+            logger.warning("Nie można zweryfikować klucza Google API: %s", _e)
+
     normalized_query = normalize_query_for_sources(query)
     if normalized_query != query:
         logger.info("Normalized query for sources: '%s' -> '%s'", query, normalized_query)
@@ -4157,6 +4283,10 @@ def main():
     
     session = create_session()
     cache_conn = setup_cache(args.cache_db) if scrape_emails_choice else None
+
+    # Gwarancja zamknięcia cache_conn nawet przy nieoczekiwanym wyjątku
+    import atexit as _atexit
+    _atexit.register(lambda: cache_conn.close() if cache_conn is not None else None)
 
     # Fetch data from Panorama Firm (always)
     logger.info("=== Fetching data from Panorama Firm ===")

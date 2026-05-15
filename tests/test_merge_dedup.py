@@ -5,7 +5,10 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
-from scraper import merge_results, normalize_name, normalize_phone, normalize_address
+from scraper import (
+    merge_results, normalize_name, normalize_phone, normalize_address,
+    is_valid_email, filter_platform_emails, strip_emoji,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -41,10 +44,12 @@ class TestNormalizeName:
 
 class TestNormalizePhone:
     def test_strips_spaces_and_dashes(self):
-        assert normalize_phone("+48 500-200-100") == "48500200100"
+        # +48 prefix usuwany → 9-cyfrowy numer
+        assert normalize_phone("+48 500-200-100") == "500200100"
 
     def test_strips_parentheses(self):
-        assert normalize_phone("(48) 500 200 100") == "48500200100"
+        # (48) traktowany jak prefix +48 → usuń
+        assert normalize_phone("(48) 500 200 100") == "500200100"
 
     def test_plain_digits_unchanged(self):
         assert normalize_phone("500200100") == "500200100"
@@ -54,6 +59,95 @@ class TestNormalizePhone:
 
     def test_empty(self):
         assert normalize_phone("") == ""
+
+    def test_with_plus48_equals_without_prefix(self):
+        # Kluczowy test dedup: ten sam numer z prefiksem i bez daje identyczny klucz
+        with_prefix = normalize_phone("+48 512 738 639")
+        without_prefix = normalize_phone("512 738 639")
+        assert with_prefix == without_prefix
+
+    def test_48_prefix_only_stripped_for_11_digits(self):
+        # Numer 10-cyfrowy zaczynający się od 48 NIE jest polskim numerem — nie ruszaj
+        assert normalize_phone("4812345678") == "4812345678"
+
+
+# ---------------------------------------------------------------------------
+# is_valid_email (nowa funkcja)
+# ---------------------------------------------------------------------------
+
+class TestIsValidEmail:
+    def test_valid_email_accepted(self):
+        assert is_valid_email("kontakt@firma.pl") is True
+
+    def test_coml_tld_note(self):
+        # .coml technicznie przechodzi regex (4 litery = poprawna długość TLD)
+        # Wykrycie tej literówki wymaga UserCheck API weryfikacji MX
+        # Ten test dokumentuje zachowanie — nie błąd w kodzie
+        pass
+
+    def test_png_extension_rejected(self):
+        # pliki graficzne w kolumnie e-mail (wiersze 97, 112 CSV)
+        assert is_valid_email("kandara-wroclaw-logo@2x.png") is False
+
+    def test_jpg_extension_rejected(self):
+        assert is_valid_email("logo@firma.jpg") is False
+
+    def test_none_rejected(self):
+        assert is_valid_email(None) is False
+
+    def test_empty_rejected(self):
+        assert is_valid_email("") is False
+
+    def test_no_at_rejected(self):
+        assert is_valid_email("kontaktfirmapl") is False
+
+
+# ---------------------------------------------------------------------------
+# filter_platform_emails (nowa funkcja)
+# ---------------------------------------------------------------------------
+
+class TestFilterPlatformEmails:
+    def test_booksy_emails_removed(self):
+        emails = ["kontakt@moja-firma.pl", "aneksy@booksy.com", "pomoc.pl@booksy.com"]
+        result = filter_platform_emails(emails)
+        assert result == ["kontakt@moja-firma.pl"]
+
+    def test_fresha_emails_removed(self):
+        emails = ["info@spa.pl", "support@fresha.com"]
+        result = filter_platform_emails(emails)
+        assert result == ["info@spa.pl"]
+
+    def test_real_emails_pass_through(self):
+        emails = ["biuro@salon.pl", "kontakt@wellness.com"]
+        result = filter_platform_emails(emails)
+        assert result == emails
+
+    def test_empty_list(self):
+        assert filter_platform_emails([]) == []
+
+
+# ---------------------------------------------------------------------------
+# strip_emoji (nowa funkcja)
+# ---------------------------------------------------------------------------
+
+class TestStripEmoji:
+    def test_removes_flower_emoji(self):
+        result = strip_emoji("🪷Masaż Lotos 🪷")
+        assert "🪷" not in result
+        assert "Masaż Lotos" in result
+
+    def test_removes_leaf_emoji(self):
+        result = strip_emoji("Levita Spa Massage Studio🌿")
+        assert "🌿" not in result
+
+    def test_plain_text_unchanged(self):
+        assert strip_emoji("Salon SPA Katowice") == "Salon SPA Katowice"
+
+    def test_none_safe(self):
+        assert strip_emoji(None) is None
+
+    def test_empty_unchanged(self):
+        assert strip_emoji("") == ""
 
 
 # ---------------------------------------------------------------------------

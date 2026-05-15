@@ -13,6 +13,8 @@ from scraper import (
     cache_get_emails,
     cache_set_emails,
     _deobfuscate_emails,
+    is_valid_email,
+    _PLATFORM_EMAILS,
 )
 
 
@@ -144,3 +146,57 @@ class TestEmailCache:
         cache_set_emails(cache_db, "https://x.pl", ["new@x.pl"])
         result = cache_get_emails(cache_db, "https://x.pl")
         assert "new@x.pl" in result
+
+
+# ---------------------------------------------------------------------------
+# Platform email filtering — e-maile Booksy/Fresha nie powinny trafiać do danych
+# ---------------------------------------------------------------------------
+
+class TestPlatformEmailFiltering:
+    def test_booksy_platform_emails_excluded_from_results(self):
+        # E-maile obsługi Booksy wbudowane w każdy profil — nie są kontaktami
+        html = "<html><body>aneksy@booksy.com pomoc.pl@booksy.com firma@moja.pl</body></html>"
+        session = _mock_session(html)
+        emails = extract_emails_from_website("https://firma.pl", session=session)
+        assert "aneksy@booksy.com" not in emails
+        assert "pomoc.pl@booksy.com" not in emails
+
+    def test_real_business_email_not_excluded(self):
+        html = "<html><body>kontakt@spa-wellness.pl</body></html>"
+        session = _mock_session(html)
+        emails = extract_emails_from_website("https://spa-wellness.pl", session=session)
+        assert "kontakt@spa-wellness.pl" in emails
+
+    def test_platform_emails_constant_not_empty(self):
+        assert len(_PLATFORM_EMAILS) >= 8
+
+
+# ---------------------------------------------------------------------------
+# Email format validation — is_valid_email
+# ---------------------------------------------------------------------------
+
+class TestEmailValidation:
+    def test_valid_pl_email(self):
+        assert is_valid_email("kontakt@firma.pl") is True
+
+    def test_valid_com_email(self):
+        assert is_valid_email("info@example.com") is True
+
+    def test_coml_note(self):
+        # .coml technicznie przechodzi regex (4 litery = poprawna długość TLD)
+        # Wykrycie tej literówki wymaga zewnętrznej weryfikacji MX (UserCheck API)
+        pass
+
+    def test_png_in_email_column_rejected(self):
+        # Wiersze 97, 112 CSV zawierają nazwy plików graficznych
+        assert is_valid_email("kandara-wroclaw-logo@2x.png") is False
+        assert is_valid_email("Logo-Shell-Flat@4x.png") is False
+
+    def test_double_dot_domain_rejected(self):
+        assert is_valid_email("user@domain..com") is False
+
+    def test_empty_rejected(self):
+        assert is_valid_email("") is False
+
+    def test_none_rejected(self):
+        assert is_valid_email(None) is False

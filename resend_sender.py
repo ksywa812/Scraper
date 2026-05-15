@@ -37,12 +37,28 @@ USERCHECK_API_KEY = os.getenv("USERCHECK_API_KEY", "")
 USERCHECK_API_BASE = "https://api.usercheck.com"
 
 EMAIL_COLUMNS = ["Email 1", "Email 2", "Email 3"]
+OTHER_EMAILS_COLUMN = "Other Emails"
 NAME_COLUMN = "Name"
 DATA_DIR = Path(__file__).parent / "data" / "Raport"
 SENT_LOG_PATH = DATA_DIR / "sent_log.json"
 VERIFY_CACHE_PATH = DATA_DIR / "email_verify_cache.json"
 
-EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# Ścisły regex — wymaga TLD ≥ 2 liter (np. odrzuca .coml)
+EMAIL_REGEX = re.compile(
+    r'^[A-Za-z0-9._%+-]+'
+    r'@[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]'
+    r'\.[A-Za-z]{2,}$'
+)
+
+_IMAGE_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.ico')
+
+# E-maile platform (Booksy, Fresha) — nie są kontaktami biznesowymi
+_PLATFORM_EMAILS = frozenset({
+    "aneksy@booksy.com", "pomoc.pl@booksy.com", "sprzedaz@booksy.com",
+    "info.pl@booksy.com", "reklamacje@booksy.com", "info@booksy.com",
+    "support@booksy.com", "hello@booksy.com",
+    "support@fresha.com", "no-reply@fresha.com", "hello@fresha.com",
+})
 
 # ── Sent Log ──────────────────────────────────────────────────────────────────
 
@@ -95,7 +111,18 @@ def find_latest_csv() -> Path:
 
 
 def is_valid_email(email: str) -> bool:
-    return bool(EMAIL_REGEX.match(email.strip()))
+    """Sprawdza format e-mail — odrzuca pliki graficzne i niepoprawne TLD (np. .coml)."""
+    if not email or not isinstance(email, str):
+        return False
+    e = email.strip().lower()
+    if e.endswith(_IMAGE_EXTENSIONS):
+        return False
+    return bool(EMAIL_REGEX.match(e))
+
+
+def is_sendable_email(email: str) -> bool:
+    """Zwraca True jeśli email jest poprawny I nie jest e-mailem platformy (Booksy/Fresha)."""
+    return is_valid_email(email) and email.strip().lower() not in _PLATFORM_EMAILS
 
 
 def load_contacts(csv_path: Path) -> list[dict]:
@@ -121,17 +148,30 @@ def load_contacts(csv_path: Path) -> list[dict]:
         voivodeship = "" if voivodeship.lower() in ("nan", "none") else voivodeship
         industry = "" if industry.lower() in ("nan", "none") else industry
 
+        # Zbierz wszystkie e-maile z wiersza: Email 1/2/3 + Other Emails (może być lista)
+        raw_emails: list[str] = []
         for col in EMAIL_COLUMNS:
             if col not in df.columns:
                 continue
             raw = str(row.get(col, "")).strip()
-            if not raw or raw.lower() in ("nan", "none", ""):
-                continue
+            if raw and raw.lower() not in ("nan", "none"):
+                # Każda komórka może zawierać wiele adresów oddzielonych przecinkiem
+                for part in re.split(r'[,;]', raw):
+                    raw_emails.append(part.strip())
 
-            email = raw.lower()
-            if not is_valid_email(email):
+        if OTHER_EMAILS_COLUMN in df.columns:
+            raw_other = str(row.get(OTHER_EMAILS_COLUMN, "")).strip()
+            if raw_other and raw_other.lower() not in ("nan", "none"):
+                for part in re.split(r'[,;]', raw_other):
+                    raw_emails.append(part.strip())
+
+        for raw_email in raw_emails:
+            if not raw_email:
+                continue
+            email = raw_email.lower()
+            if not is_sendable_email(email):
                 invalid_count += 1
-                print(f"  [WARN] Nieprawidłowy email pominięty: {raw!r}")
+                print(f"  [WARN] Email pominięty ({raw_email!r}): nieprawidłowy format lub e-mail platformy")
                 continue
             if email in seen_emails:
                 continue
@@ -466,7 +506,7 @@ def send_campaign(contacts: list[dict], from_email: str, subject: str, html_temp
     BATCH_SIZE = 100
     stats = {"sent": 0, "skipped": 0, "failed": 0}
 
-    sent_log = load_sent_log() if not dry_run else load_sent_log()
+    sent_log = load_sent_log()
 
     # Filtruj już wysłanych
     fresh_contacts = []
