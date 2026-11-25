@@ -110,6 +110,9 @@ def find_latest_csv() -> Path:
     return csvs[0]
 
 
+_TYPO_TLDS = frozenset({"coml", "con", "cmo", "comm", "coom", "cm", "pll", "plll", "p"})
+
+
 def is_valid_email(email: str) -> bool:
     """Sprawdza format e-mail — odrzuca pliki graficzne i niepoprawne TLD (np. .coml)."""
     if not email or not isinstance(email, str):
@@ -117,7 +120,10 @@ def is_valid_email(email: str) -> bool:
     e = email.strip().lower()
     if e.endswith(_IMAGE_EXTENSIONS):
         return False
-    return bool(EMAIL_REGEX.match(e))
+    if not EMAIL_REGEX.match(e):
+        return False
+    tld = e.rsplit(".", 1)[-1]
+    return tld not in _TYPO_TLDS
 
 
 def is_sendable_email(email: str) -> bool:

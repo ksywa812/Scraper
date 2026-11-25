@@ -39,6 +39,7 @@ import time
 import unicodedata
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 from urllib.error import HTTPError, URLError
@@ -56,10 +57,30 @@ logger = logging.getLogger("attio_sync")
 # ─── Stałe i kanoniczna taksonomia branż SoundYou ───────────────────────────
 
 ATTIO_API_BASE = "https://api.attio.com/v2"
+USERCHECK_API_BASE = "https://api.usercheck.com"
 DEFAULT_CSV_PATH = Path(__file__).parent / "data" / "Raport" / "SoundYouLeads.csv"
+VERIFY_CACHE_PATH = Path(__file__).parent / "data" / "Raport" / "email_verify_cache.json"
+REPORTS_DIR = Path(__file__).parent / "logs"
 
 INDUSTRY_ATTR_SLUG = "soundyou_industry"
 INDUSTRY_ATTR_TITLE = "Branża SoundYou"
+
+LEAD_STATUS_SLUG = "lead_status"
+LEAD_STATUS_TITLE = "Status leada"
+DEFAULT_NEW_LEAD_STATUS = "Nowy"
+LEAD_STATUS_OPTIONS: tuple[str, ...] = (
+    "Nowy",
+    "Gotowy do kampanii",
+    "Wysłano kampanię",
+    "Zainteresowany",
+    "Rozmowa / Demo",
+    "Trial SoundYou",
+    "Klient",
+    "Odrzucony / DNC",
+)
+
+LEAD_BATCH_SLUG = "lead_batch"
+LEAD_BATCH_TITLE = "Partia importu"
 
 SOUNDYOU_INDUSTRIES: tuple[str, ...] = (
     "SPA & Wellness",
@@ -448,6 +469,52 @@ PLATFORM_EMAILS = frozenset({
 
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".bmp")
 
+# Literówki w końcówkach TLD oraz techniczne rozszerzenia plików mylone z e-mailami
+TYPO_OR_FILE_TLDS = frozenset({
+    "coml", "con", "cmo", "comm", "coom", "cm", "om",
+    "pll", "plll", "p", "euu", "nett", "orgg", "inf",
+    "local", "localhost", "invalid", "test", "example",
+    "html", "htm", "php", "asp", "aspx", "js", "css", "json", "xml", "pdf", "txt",
+})
+
+# Częste literówki popularnych domen pocztowych + domeny testowe / jednorazowe (disposable)
+BLOCKED_EMAIL_DOMAINS = frozenset({
+    "gmai.com", "gmial.com", "gamil.com", "gnail.com", "gmal.com", "gmail.con", "gmail.coml", "gmail.co",
+    "hotmial.com", "outlok.com", "yaho.com", "wp.pll", "o2.pll", "onet.pll", "interia.pll",
+    "example.com", "example.org", "example.net", "example.pl",
+    "test.com", "test.pl", "domain.com", "domena.pl", "twojadomena.pl", "yourdomain.com",
+    "sentry.io", "wixpress.com",
+    "mailinator.com", "tempmail.com", "10minutemail.com", "guerrillamail.com",
+    "yopmail.com", "sharklasers.com", "trashmail.com", "dispostable.com",
+})
+
+# Filtr anty-ICP: wyklucza firmy ewidentnie spoza docelowych lokali usługowych SoundYou
+NON_ICP_PATTERNS = re.compile(
+    r"\b("
+    r"auto[\s\-]*spa|car[\s\-]*spa|auto[\s\-]*detailing|car[\s\-]*detailing|"
+    r"myjni\w*\s+samochod\w*|warsztat\w*\s+samochod\w*|wulkanizacj\w*|mechanik\w*\s+pojazd\w*|"
+    r"pralni\w*\s+chemiczn\w*|pralni\w*\s+przemyslow\w*|multiwash|"
+    r"software\s+house|agencj\w*\s+(?:interaktywn\w*|marketingow\w*|seo|reklamow\w*)|"
+    r"tworzeni\w*\s+stron|website\s+builder|hosting\w*|rejestracj\w*\s+domen|"
+    r"spedycj\w*|transport\s+miedzynarodow\w*|hurtowni\w*\s+stali"
+    r")\b",
+    re.IGNORECASE,
+)
+
+NON_ICP_DOMAINS = frozenset({
+    "wenet.pl", "bowwe.com", "webador.com", "domena.pl", "multiwash.pl",
+    "home.pl", "nazwa.pl", "cyberfolks.pl", "ovh.pl", "unionalpha.com",
+})
+
+CORE_VENUE_GUARD_RE = re.compile(
+    r"\b(hotel\w*|pensjonat\w*|restaurac\w*|kawiarni\w*|bistro|fryzjer\w*|barber\w*|"
+    r"kobido|masaż\w*|masaz\w*|jog[ai]|yoga|pilates|siłowni\w*|silowni\w*|"
+    r"salon\s+urody|kosmetycz\w*|kosmetolog\w*|odnow\w*\s+biologiczn\w*|termy)\b",
+    re.IGNORECASE,
+)
+
+AUTO_WASH_RE = re.compile(r"\b(auto[\s\-]*spa|car[\s\-]*spa|detailing|myjni\w*)\b", re.IGNORECASE)
+
 
 # ─── Funkcje pomocnicze i klasyfikacja ──────────────────────────────────────
 
@@ -481,18 +548,139 @@ def business_domain(raw: str) -> str:
     return host
 
 
-def extract_emails(text: str) -> set[str]:
+def validate_email_syntax(raw: str) -> tuple[bool, str]:
+    """Sprawdza składnię e-maila, odrzuca obrazy, konta katalogów, literówki TLD (.coml) i disposable."""
+    e = (raw or "").strip().lower()
+    if not e or len(e) > 254 or "@" not in e:
+        return False, "invalid_syntax"
+    if not EMAIL_RE.fullmatch(e):
+        return False, "invalid_syntax"
+    if e.endswith(IMAGE_EXTENSIONS):
+        return False, "image_filename"
+    if e in PLATFORM_EMAILS:
+        return False, "platform_email"
+    local_part, domain_part = e.rsplit("@", 1)
+    if not local_part or local_part.startswith(".") or local_part.endswith(".") or ".." in e:
+        return False, "invalid_syntax"
+    if any(domain_part == p or domain_part.endswith(f".{p}") for p in PLATFORM_DOMAINS):
+        return False, "platform_domain"
+    if domain_part in BLOCKED_EMAIL_DOMAINS:
+        return False, "blocked_or_typo_domain"
+    tld = domain_part.rsplit(".", 1)[-1]
+    if len(tld) < 2 or not tld.isalpha() or tld in TYPO_OR_FILE_TLDS:
+        return False, f"typo_tld:{tld}"
+    return True, ""
+
+
+def extract_emails(text: str, rejected_log: list[dict[str, str]] | None = None) -> set[str]:
     """Wyciąga poprawne, wysyłalne adresy e-mail z komórki CSV lub opisu."""
     found: set[str] = set()
     for email in EMAIL_RE.findall(text or ""):
         e = email.strip().lower()
-        if len(e) > 254 or e in PLATFORM_EMAILS or e.endswith(IMAGE_EXTENSIONS):
-            continue
-        domain_part = e.rsplit("@", 1)[1]
-        if any(domain_part == p or domain_part.endswith(f".{p}") for p in PLATFORM_DOMAINS):
+        ok, reason = validate_email_syntax(e)
+        if not ok:
+            if rejected_log is not None and reason not in ("platform_email", "platform_domain", "image_filename"):
+                rejected_log.append({"email": e, "reason": reason})
             continue
         found.add(e)
     return found
+
+
+def is_non_icp_business(name: str = "", website: str = "", raw_industry: str = "") -> tuple[bool, str]:
+    """Wykrywa firmy spoza docelowego ICP SoundYou (np. Auto SPA / detailing, agencje IT/SEO, pralnie)."""
+    dom = business_domain(website)
+    if dom in NON_ICP_DOMAINS:
+        return True, f"non_icp_domain:{dom}"
+    blob = f"{name or ''} {dom} {raw_industry or ''}".strip()
+    if AUTO_WASH_RE.search(blob):
+        return True, "auto_wash_or_detailing"
+    m = NON_ICP_PATTERNS.search(blob)
+    if m and not CORE_VENUE_GUARD_RE.search(name or ""):
+        return True, f"non_icp_keyword:{m.group(0).lower()}"
+    return False, ""
+
+
+def load_email_verify_cache(cache_path: Path | None = None) -> dict[str, dict[str, Any]]:
+    target = cache_path or VERIFY_CACHE_PATH
+    if not target.exists():
+        return {}
+    try:
+        return json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def save_email_verify_cache(cache: dict[str, dict[str, Any]], cache_path: Path | None = None) -> None:
+    target = cache_path or VERIFY_CACHE_PATH
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as exc:
+        logger.warning("Nie udało się zapisać cache UserCheck %s: %s", target, exc)
+
+
+def verify_email_usercheck(
+    email: str,
+    api_key: str,
+    *,
+    cache: dict[str, dict[str, Any]] | None = None,
+    pace_seconds: float = 1.05,
+) -> tuple[bool, str]:
+    """Weryfikuje dostarczalność e-maila przez UserCheck API (MX, disposable, blocklisted, spam) z lokalnym cache."""
+    e = email.strip().lower()
+    ok_syn, syn_reason = validate_email_syntax(e)
+    if not ok_syn:
+        return False, syn_reason
+
+    if cache is not None and e in cache:
+        cached = cache[e]
+        return bool(cached.get("ok", True)), str(cached.get("reason", ""))
+
+    if not api_key or api_key == "your_usercheck_api_key_here":
+        return True, ""
+
+    req = Request(
+        f"{USERCHECK_API_BASE}/email/{e}",
+        method="GET",
+        headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
+    )
+    opener = build_opener(_NoRedirect)
+    for attempt in range(3):
+        if pace_seconds > 0:
+            time.sleep(pace_seconds)
+        try:
+            with opener.open(req, timeout=10) as resp:
+                data = json.load(resp)
+        except HTTPError as err:
+            code = err.code
+            err.close()
+            if code == 429 and attempt < 2:
+                time.sleep(2 ** (attempt + 1))
+                continue
+            return True, ""
+        except (URLError, OSError, ValueError):
+            return True, ""
+
+        ok = True
+        reason = ""
+        if not data.get("mx", True):
+            ok, reason = False, "no_mx"
+        elif data.get("disposable"):
+            ok, reason = False, "disposable"
+        elif data.get("blocklisted"):
+            ok, reason = False, "blocklisted"
+        elif data.get("spam"):
+            ok, reason = False, "spam"
+
+        if cache is not None:
+            cache[e] = {
+                "ok": ok,
+                "reason": reason,
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }
+        return ok, reason
+
+    return True, ""
 
 
 def normalize_phone_e164(raw: str) -> str:
@@ -867,9 +1055,17 @@ class Lead:
         ordered = [i for i in SOUNDYOU_INDUSTRIES if i in self.industries]
         return ordered or ["Lokal Usługowy / Inne"]
 
-    def company_values(self, safe_domains: list[str] | None = None) -> dict[str, Any]:
+    def company_values(
+        self,
+        safe_domains: list[str] | None = None,
+        *,
+        lead_status: str = DEFAULT_NEW_LEAD_STATUS,
+        lead_batch: str = "",
+    ) -> dict[str, Any]:
         industries = self.ordered_industries
         facts = ["Źródło: Web-Crunchy-Scrap", f"Branża: {', '.join(industries)}"]
+        if lead_batch:
+            facts.append(f"Partia: {lead_batch}")
         if self.phones:
             facts.append(f"Telefony: {', '.join(sorted(self.phones))}")
         if self.emails:
@@ -898,6 +1094,10 @@ class Lead:
             "primary_location": location,
             INDUSTRY_ATTR_SLUG: industries,
         }
+        if lead_status:
+            values[LEAD_STATUS_SLUG] = lead_status
+        if lead_batch:
+            values[LEAD_BATCH_SLUG] = lead_batch
         if self.facebook:
             values["facebook"] = self.facebook
         if self.instagram:
@@ -908,8 +1108,18 @@ class Lead:
         return values
 
 
-def read_csv_leads(csv_path: Path, stats: Counter[str]) -> Iterable[Lead]:
+def read_csv_leads(
+    csv_path: Path,
+    stats: Counter[str],
+    *,
+    filter_non_icp: bool = True,
+    audit: dict[str, list[dict[str, str]]] | None = None,
+) -> Iterable[Lead]:
     """Czyta plik CSV ze scrapera i zwraca strumień oczyszczonych obiektów Lead."""
+    rejected_emails_log = audit.setdefault("rejected_emails", []) if audit is not None else None
+    inferred_names_log = audit.setdefault("inferred_names", []) if audit is not None else None
+    non_icp_log = audit.setdefault("non_icp_skipped", []) if audit is not None else None
+
     with csv_path.open(encoding="utf-8-sig", newline="") as stream:
         reader = csv.reader(stream)
         headers = next(reader, None)
@@ -937,7 +1147,7 @@ def read_csv_leads(csv_path: Path, stats: Counter[str]) -> Iterable[Lead]:
             emails: set[str] = set()
             for idx in email_cols:
                 if idx < len(row):
-                    emails.update(extract_emails(row[idx]))
+                    emails.update(extract_emails(row[idx], rejected_log=rejected_emails_log))
 
             name = resolve_company_name(
                 raw_name,
@@ -950,10 +1160,28 @@ def read_csv_leads(csv_path: Path, stats: Counter[str]) -> Iterable[Lead]:
             if len(name) < 3 or not any(c.isalpha() for c in name):
                 stats["invalid_rows"] += 1
                 continue
-            if strip_emoji(raw_name).strip() != name:
-                stats["inferred_company_names"] += 1
 
             raw_industry = data.get("Branża", "")
+            if filter_non_icp:
+                non_icp, non_icp_reason = is_non_icp_business(name=name, website=website, raw_industry=raw_industry)
+                if non_icp:
+                    stats["skipped_non_icp"] += 1
+                    if non_icp_log is not None:
+                        non_icp_log.append({"name": name, "domain": domain, "reason": non_icp_reason})
+                    continue
+
+            if strip_emoji(raw_name).strip() != name:
+                stats["inferred_company_names"] += 1
+                if inferred_names_log is not None:
+                    inferred_names_log.append({
+                        "raw_name": raw_name,
+                        "resolved_name": name,
+                        "city": city,
+                        "website": website,
+                        "facebook": fb,
+                        "instagram": ig,
+                    })
+
             signal_urls = " ".join(x for x in (website, fb, ig) if x)
             industries = set(classify_soundyou_industries(raw_industry, name=name, website=signal_urls))
             yield Lead(
@@ -970,13 +1198,18 @@ def read_csv_leads(csv_path: Path, stats: Counter[str]) -> Iterable[Lead]:
             )
 
 
-def load_and_dedup_csv(csv_paths: list[Path]) -> tuple[list[Lead], Counter[str], Counter[str]]:
+def load_and_dedup_csv(
+    csv_paths: list[Path],
+    *,
+    filter_non_icp: bool = True,
+    audit: dict[str, list[dict[str, str]]] | None = None,
+) -> tuple[list[Lead], Counter[str], Counter[str]]:
     """Ładuje jeden lub więcej plików CSV i lokalnie deduplikuje leady."""
     stats: Counter[str] = Counter()
     leads: list[Lead] = []
 
     for csv_path in csv_paths:
-        for lead in read_csv_leads(csv_path, stats):
+        for lead in read_csv_leads(csv_path, stats, filter_non_icp=filter_non_icp, audit=audit):
             name_norm, city_norm = lead.identity
             lead_pc = extract_postcode(lead.address)
             candidates = [
@@ -1104,22 +1337,21 @@ class AttioClient:
 # ─── Konfiguracja schematu (soundyou_industry + opcje + raport widoków) ─────
 
 def ensure_soundyou_schema(client: AttioClient, dry_run: bool = False) -> dict[str, Any]:
-    """Zapewnia istnienie multiselect `soundyou_industry` i wszystkich opcji na `companies`."""
+    """Zapewnia istnienie `soundyou_industry`, `lead_status` i `lead_batch` na `companies`."""
     summary: dict[str, Any] = {
         "attribute_existed": False,
         "attribute_created": False,
         "options_created": [],
+        "lead_status_ready": False,
+        "lead_batch_ready": False,
         "existing_industry_views": [],
         "missing_industry_views": [],
     }
 
-    attrs = client.request("/objects/companies/attributes", method="GET")
-    existing_attr = next(
-        (a for a in (attrs or []) if a.get("api_slug") == INDUSTRY_ATTR_SLUG),
-        None,
-    )
+    attrs = client.request("/objects/companies/attributes", method="GET") or []
+    by_slug = {a.get("api_slug"): a for a in attrs if isinstance(a, dict)}
 
-    if existing_attr:
+    if INDUSTRY_ATTR_SLUG in by_slug:
         summary["attribute_existed"] = True
     elif not dry_run:
         client.request(
@@ -1156,6 +1388,61 @@ def ensure_soundyou_schema(client: AttioClient, dry_run: bool = False) -> dict[s
                     method="POST",
                 )
             summary["options_created"].append(title)
+
+    # Sprawdź / utwórz `lead_status` i `lead_batch`
+    if LEAD_STATUS_SLUG in by_slug:
+        summary["lead_status_ready"] = True
+    elif not dry_run:
+        try:
+            client.request(
+                "/objects/companies/attributes",
+                {
+                    "data": {
+                        "title": LEAD_STATUS_TITLE,
+                        "api_slug": LEAD_STATUS_SLUG,
+                        "description": "Etap leada w lejku sprzedażowym SoundYou",
+                        "type": "status",
+                        "is_multiselect": False,
+                        "is_required": False,
+                        "is_unique": False,
+                        "config": {},
+                    }
+                },
+                method="POST",
+            )
+            for st_title in LEAD_STATUS_OPTIONS:
+                client.request(
+                    f"/objects/companies/attributes/{LEAD_STATUS_SLUG}/statuses",
+                    {"data": {"title": st_title}},
+                    method="POST",
+                )
+            summary["lead_status_ready"] = True
+        except AttioAPIError as err:
+            logger.warning("Nie udało się utworzyć %s: %s", LEAD_STATUS_SLUG, err)
+
+    if LEAD_BATCH_SLUG in by_slug:
+        summary["lead_batch_ready"] = True
+    elif not dry_run:
+        try:
+            client.request(
+                "/objects/companies/attributes",
+                {
+                    "data": {
+                        "title": LEAD_BATCH_TITLE,
+                        "api_slug": LEAD_BATCH_SLUG,
+                        "description": "Źródło i partia importu leada",
+                        "type": "text",
+                        "is_multiselect": False,
+                        "is_required": False,
+                        "is_unique": False,
+                        "config": {},
+                    }
+                },
+                method="POST",
+            )
+            summary["lead_batch_ready"] = True
+        except AttioAPIError as err:
+            logger.warning("Nie udało się utworzyć %s: %s", LEAD_BATCH_SLUG, err)
 
     # Sprawdź 8 dedykowanych widoków branżowych na Companies
     try:
@@ -1197,6 +1484,7 @@ def build_attio_indexes(client: AttioClient) -> dict[str, Any]:
     company_state: dict[str, dict[str, Any]] = {}
     people_by_email: dict[str, dict[str, Any]] = {}
     people_by_phone: dict[str, dict[str, Any]] = {}
+    dnc_emails: set[str] = set()
 
     for rec in client.query_all_records("companies"):
         rid = rec["id"]["record_id"]
@@ -1263,10 +1551,17 @@ def build_attio_indexes(client: AttioClient) -> dict[str, Any]:
         comp_refs = vals.get("company") or []
         linked_cid = comp_refs[0].get("target_record_id") if comp_refs else None
 
+        unsub_vals = vals.get("resend_unsubscribed") or []
+        is_unsub = any(bool(v.get("value")) for v in unsub_vals)
+        deliv_titles = _extract_multiselect_titles(vals.get("resend_last_delivery_status", []))
+        is_bounced = bool(deliv_titles & {"bounced", "suppressed"})
+
         for item in vals.get("email_addresses", []):
             em = (item.get("email_address") or "").strip().lower()
             if not em:
                 continue
+            if is_unsub or is_bounced:
+                dnc_emails.add(em)
             people_by_email[em] = {
                 "record_id": pid,
                 "company_id": linked_cid,
@@ -1303,6 +1598,7 @@ def build_attio_indexes(client: AttioClient) -> dict[str, Any]:
         "company_state": company_state,
         "people_by_email": people_by_email,
         "people_by_phone": people_by_phone,
+        "dnc_emails": dnc_emails,
     }
 
 
@@ -1361,15 +1657,25 @@ def sync_leads_to_attio(
     dry_run: bool = False,
     sync_people: bool = True,
     enrich_existing: bool = False,
+    lead_batch: str = "",
+    lead_status: str = DEFAULT_NEW_LEAD_STATUS,
+    verify_emails: bool = True,
+    usercheck_api_key: str | None = None,
+    audit: dict[str, list[dict[str, str]]] | None = None,
 ) -> dict[str, Any]:
     """Synchronizuje zdeduplikowane leady do `Companies` i `People` w Attio.
 
     Domyślnie (`enrich_existing=False`) działa w trybie ścisłej deduplikacji:
-    jeśli lead już istnieje w Attio (po domenie, e-mailu, telefonie, nazwie+mieście,
-    nazwie+kodzie pocztowym lub unikalnej nazwie), NIE jest dodawany ani nadpisywany.
+    jeśli lead już istnieje w Attio (po domenie, social media, e-mailu, telefonie,
+    nazwie+mieście, nazwie+kodzie pocztowym lub unikalnej nazwie), NIE jest dodawany.
+    Dla nowych leadów stosuje bramę jakości e-maili (DNC Attio + UserCheck MX/disposable).
     """
     indexes = build_attio_indexes(client)
     industry_counts: Counter[str] = Counter()
+    uc_key = (usercheck_api_key if usercheck_api_key is not None else os.getenv("USERCHECK_API_KEY", "")).strip()
+    uc_cache = load_email_verify_cache() if (verify_emails and uc_key) else None
+    uc_dirty = False
+    rejected_emails_log = audit.setdefault("rejected_emails", []) if audit is not None else []
 
     for lead in leads:
         for ind in lead.ordered_industries:
@@ -1427,12 +1733,36 @@ def sync_leads_to_attio(
                 stats["skipped_existing_companies"] += 1
             company_id = matched_cid
         else:
+            # Brama jakości e-maili (DNC Attio + UserCheck MX/disposable) TYLKO dla nowych leadów
+            if lead.emails:
+                verified_emails: set[str] = set()
+                for em in sorted(lead.emails):
+                    if em in indexes["dnc_emails"]:
+                        stats["skipped_dnc_emails"] += 1
+                        rejected_emails_log.append({"email": em, "reason": "attio_dnc"})
+                        continue
+                    if verify_emails and uc_key:
+                        was_cached = uc_cache is not None and em in uc_cache
+                        ok_uc, uc_reason = verify_email_usercheck(em, uc_key, cache=uc_cache)
+                        if not was_cached:
+                            uc_dirty = True
+                        if not ok_uc:
+                            stats["rejected_bad_emails"] += 1
+                            rejected_emails_log.append({"email": em, "reason": f"usercheck:{uc_reason}"})
+                            continue
+                    verified_emails.add(em)
+                lead.emails = verified_emails
+
             # Nowa firma — wymagaj co najmniej 1 sygnału kontaktowego/tożsamościowego
             if not (lead.emails or lead.phones or safe_domains or lead.facebook or lead.instagram):
                 stats["skipped_weak_identity"] += 1
                 continue
 
-            values = lead.company_values(safe_domains=safe_domains)
+            values = lead.company_values(
+                safe_domains=safe_domains,
+                lead_status=lead_status,
+                lead_batch=lead_batch,
+            )
             if dry_run:
                 company_id = f"dry-run-{stats['created_companies'] + 1}"
             else:
@@ -1547,6 +1877,9 @@ def sync_leads_to_attio(
             }
             stats["created_people"] += 1
 
+    if uc_dirty and uc_cache is not None:
+        save_email_verify_cache(uc_cache)
+
     return {
         "stats": dict(stats),
         "industry_counts": dict(industry_counts),
@@ -1562,6 +1895,20 @@ def resolve_attio_token(explicit_token: str | None = None, allow_prompt: bool = 
     return ""
 
 
+def write_sync_report(report: dict[str, Any], report_path: Path | None = None) -> Path | None:
+    """Zapisuje ustrukturyzowany raport JSON z przebiegu do `logs/attio_sync_<ts>.json`."""
+    target = report_path or (
+        REPORTS_DIR / f"attio_sync_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    )
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        return target
+    except OSError as exc:
+        logger.warning("Nie udało się zapisać raportu przebiegu %s: %s", target, exc)
+        return None
+
+
 def sync_csv_to_attio(
     csv_path: str | Path = DEFAULT_CSV_PATH,
     *,
@@ -1571,22 +1918,51 @@ def sync_csv_to_attio(
     ensure_schema: bool = True,
     sync_people: bool = True,
     enrich_existing: bool = False,
+    lead_batch: str | None = None,
+    verify_emails: bool = True,
+    filter_non_icp: bool = True,
+    save_report: bool = True,
+    report_path: Path | None = None,
 ) -> dict[str, Any]:
     """Główny punkt wejścia (wywoływany z CLI lub z `scraper.py --sync-attio`)."""
     path = Path(csv_path)
     if not path.exists():
         raise FileNotFoundError(f"Plik CSV nie istnieje: {path}")
 
-    leads, stats, domain_counts = load_and_dedup_csv([path])
+    effective_batch = (
+        lead_batch
+        if lead_batch is not None
+        else f"{datetime.now().strftime('%Y-%m-%d')} | {path.stem}"
+    )
+    audit: dict[str, list[dict[str, str]]] = {
+        "inferred_names": [],
+        "rejected_emails": [],
+        "non_icp_skipped": [],
+    }
+    leads, stats, domain_counts = load_and_dedup_csv(
+        [path],
+        filter_non_icp=filter_non_icp,
+        audit=audit,
+    )
+    if audit["rejected_emails"]:
+        stats["rejected_syntax_or_typo_emails"] = len(audit["rejected_emails"])
 
     if offline_dry_run:
         industry_counts = Counter(ind for lead in leads for ind in lead.ordered_industries)
-        return {
+        out = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "mode": "offline_dry_run",
             "csv": str(path),
+            "lead_batch": effective_batch,
             "stats": dict(stats),
             "industry_counts": dict(industry_counts),
+            "audit": audit,
         }
+        if save_report:
+            saved = write_sync_report(out, report_path)
+            if saved:
+                out["report_file"] = str(saved)
+        return out
 
     api_token = resolve_attio_token(token, allow_prompt=True)
     if not api_token:
@@ -1608,19 +1984,30 @@ def sync_csv_to_attio(
         dry_run=dry_run,
         sync_people=sync_people,
         enrich_existing=enrich_existing,
+        lead_batch=effective_batch,
+        verify_emails=verify_emails,
+        audit=audit,
     )
-    return {
+    out = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "mode": "dry_run" if dry_run else "apply",
         "csv": str(path),
+        "lead_batch": effective_batch,
         "schema": schema_summary,
         **result,
+        "audit": audit,
     }
+    if save_report:
+        saved = write_sync_report(out, report_path)
+        if saved:
+            out["report_file"] = str(saved)
+    return out
 
 
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     parser = argparse.ArgumentParser(
-        description="Synchronizacja leadów CSV ze scrapera wprost do Attio (Companies + People, branże SoundYou, ścisła deduplikacja)."
+        description="Synchronizacja leadów CSV ze scrapera wprost do Attio (Companies + People, branże SoundYou, ścisła deduplikacja i brama jakości)."
     )
     parser.add_argument(
         "--csv",
@@ -1636,12 +2023,12 @@ def main() -> int:
     parser.add_argument(
         "--offline-dry-run",
         action="store_true",
-        help="Tylko lokalna deduplikacja i klasyfikacja branż bez połączenia z Attio",
+        help="Tylko lokalna deduplikacja, filtr anty-ICP i klasyfikacja branż bez połączenia z Attio",
     )
     parser.add_argument(
         "--ensure-schema",
         action="store_true",
-        help="Tylko sprawdź/utwórz atrybut `soundyou_industry` i opcje branż w Attio (bez importu CSV)",
+        help="Tylko sprawdź/utwórz atrybuty SoundYou (`soundyou_industry`, `lead_status`, `lead_batch`) w Attio",
     )
     parser.add_argument(
         "--no-ensure-schema",
@@ -1657,6 +2044,26 @@ def main() -> int:
         "--enrich-existing",
         action="store_true",
         help="Opcjonalnie dopisuj brakujące branże/domeny do firm już istniejących w Attio (domyślnie istniejące leady są całkowicie pomijane)",
+    )
+    parser.add_argument(
+        "--batch",
+        default=None,
+        help="Etykieta partii importu zapisywana w polu `lead_batch` (domyślnie: YYYY-MM-DD | nazwa_csv)",
+    )
+    parser.add_argument(
+        "--no-verify-emails",
+        action="store_true",
+        help="Pomiń zdalną weryfikację MX/disposable w UserCheck API dla nowych leadów",
+    )
+    parser.add_argument(
+        "--include-non-icp",
+        action="store_true",
+        help="Wyłącz filtr anty-ICP (domyślnie odrzuca Auto SPA, agencje IT/SEO, pralnie itp.)",
+    )
+    parser.add_argument(
+        "--no-report",
+        action="store_true",
+        help="Nie zapisuj pliku raportu JSON w katalogu logs/",
     )
     parser.add_argument(
         "--token",
@@ -1684,6 +2091,10 @@ def main() -> int:
             ensure_schema=not args.no_ensure_schema,
             sync_people=not args.companies_only,
             enrich_existing=args.enrich_existing,
+            lead_batch=args.batch,
+            verify_emails=not args.no_verify_emails,
+            filter_non_icp=not args.include_non_icp,
+            save_report=not args.no_report,
         )
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0

@@ -47,6 +47,8 @@ class FakeAttioClient:
             opt = {"title": payload["data"]["title"], "is_archived": False}
             self.options.append(opt)
             return opt
+        if m == "POST" and path == f"/objects/companies/attributes/{mod.LEAD_STATUS_SLUG}/statuses":
+            return {"title": payload["data"]["title"]}
         if m == "GET" and path == "/objects/companies/views":
             return self.views
         if m == "POST" and path == "/objects/companies/records":
@@ -297,7 +299,10 @@ class TestSchemaAndSync:
         stats = Counter()
         domain_counts = Counter({"jasminespa.pl": 1, "hotelsloneczny.pl": 1})
 
-        res = mod.sync_leads_to_attio(client, leads, stats, domain_counts, dry_run=False, sync_people=True)
+        res = mod.sync_leads_to_attio(
+            client, leads, stats, domain_counts,
+            dry_run=False, sync_people=True, verify_emails=False,
+        )
         st = res["stats"]
         assert st["skipped_existing_companies"] == 4
         assert st["created_companies"] == 1
@@ -357,7 +362,10 @@ class TestSchemaAndSync:
                 domains={"cafearoma.pl"},
             )
         ]
-        res = mod.sync_leads_to_attio(client, leads, Counter(), Counter({"cafearoma.pl": 1}), dry_run=True)
+        res = mod.sync_leads_to_attio(
+            client, leads, Counter(), Counter({"cafearoma.pl": 1}),
+            dry_run=True, verify_emails=False,
+        )
         assert res["stats"]["created_companies"] == 1
         assert res["stats"]["created_people"] == 1
         write_calls = [c for c in client.calls if c[0] in ("POST", "PATCH", "PUT", "DELETE")]
@@ -456,3 +464,117 @@ class TestSocialAndNameResolution:
         vals = lead.company_values()
         assert vals["facebook"] == "https://www.facebook.com/AtelierKobidoWroclaw"
         assert vals["instagram"] == "https://www.instagram.com/atelier_kobido_wroclaw"
+        assert vals["lead_status"] == "Nowy"
+
+
+# ─── Krok A & Krok B: Pipeline fields, JSON reports, Email Gate & Anti-ICP ──
+
+class TestQualityGateAndPipelineFields:
+    def test_email_syntax_gate_rejects_typos_and_disposable_domains(self):
+        assert mod.validate_email_syntax("palpatio.masaze@gmail.coml") == (False, "blocked_or_typo_domain")
+        assert mod.validate_email_syntax("kontakt@salon.coml") == (False, "typo_tld:coml")
+        assert mod.validate_email_syntax("biuro@firma.pll") == (False, "typo_tld:pll")
+        assert mod.validate_email_syntax("spam@mailinator.com") == (False, "blocked_or_typo_domain")
+        assert mod.validate_email_syntax("recepcja@hotelmarta.com.pl") == (True, "")
+
+    def test_anti_icp_filter_excludes_auto_spa_and_agencies_but_keeps_real_venues(self):
+        assert mod.is_non_icp_business(name="Auto SPA Detailing Wrocław")[0] is True
+        assert mod.is_non_icp_business(name="WeNet Group", website="https://wenet.pl")[0] is True
+        assert mod.is_non_icp_business(name="MultiWash Pralnia Chemiczna", website="https://multiwash.pl")[0] is True
+        assert mod.is_non_icp_business(name="Hotel Dwór Elizy & SPA", website="https://dwor-elizy.pl")[0] is False
+        assert mod.is_non_icp_business(name="Kawiarnia Aromat", website="https://aromat.wroclaw.pl")[0] is False
+
+    def test_sync_sets_lead_status_and_batch_and_blocks_dnc_and_bad_cached_emails(self, tmp_path: Path, monkeypatch):
+        cache_file = tmp_path / "email_verify_cache.json"
+        cache_file.write_text(
+            '{"dead@nowylokal.pl": {"ok": false, "reason": "no_mx"}, "good@nowylokal.pl": {"ok": true, "reason": ""}}',
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(mod, "VERIFY_CACHE_PATH", cache_file)
+
+        client = FakeAttioClient(
+            people=[
+                {
+                    "id": {"record_id": "dnc-pers"},
+                    "values": {
+                        "email_addresses": [{"email_address": "wypisany@inny.pl"}],
+                        "resend_unsubscribed": [{"value": True}],
+                        "company": [],
+                    },
+                }
+            ]
+        )
+
+        # Nowy lead z 1 dobrym mailem i 1 bez MX (z cache UserCheck)
+        leads = [
+            mod.Lead(
+                name="Nowa Kawiarnia Kraftowa",
+                city="Wrocław",
+                region="Dolnośląskie",
+                address="Świdnicka 10, 50-067 Wrocław",
+                industries={"Kawiarnie"},
+                emails={"dead@nowylokal.pl", "good@nowylokal.pl"},
+                phones={"+48501602703"},
+                domains={"nowylokal.pl"},
+            )
+        ]
+        audit = {"rejected_emails": []}
+        res = mod.sync_leads_to_attio(
+            client,
+            leads,
+            Counter(),
+            Counter({"nowylokal.pl": 1}),
+            dry_run=False,
+            sync_people=True,
+            lead_batch="2026-11-25 | kawiarnia-wroclaw",
+            verify_emails=True,
+            usercheck_api_key="uc_test_key",
+            audit=audit,
+        )
+        st = res["stats"]
+        assert st["created_companies"] == 1
+        assert st["rejected_bad_emails"] == 1
+        assert st["created_people"] == 1
+
+        comp_post = [c for c in client.calls if c[0] == "POST" and c[1] == "/objects/companies/records"][0]
+        c_vals = comp_post[2]["data"]["values"]
+        assert c_vals["lead_status"] == "Nowy"
+        assert c_vals["lead_batch"] == "2026-11-25 | kawiarnia-wroclaw"
+
+        pers_post = [c for c in client.calls if c[0] == "POST" and c[1] == "/objects/people/records"][0]
+        assert pers_post[2]["data"]["values"]["email_addresses"] == ["good@nowylokal.pl"]
+
+    def test_offline_dry_run_writes_json_report_with_audit_details(self, tmp_path: Path):
+        csv_path = tmp_path / "batch.csv"
+        report_file = tmp_path / "run_report.json"
+        with csv_path.open("w", encoding="utf-8", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=["Branża", "Miasto", "Name", "Website", "Email 1"])
+            w.writeheader()
+            w.writerow({
+                "Branża": "spa",
+                "Miasto": "Wrocław",
+                "Name": "Auto SPA Detailing",
+                "Website": "https://autospa.pl",
+                "Email 1": "info@autospa.pl",
+            })
+            w.writerow({
+                "Branża": "kawiarnia",
+                "Miasto": "Wrocław",
+                "Name": "Home",
+                "Website": "https://kawiarnia-zloty-kubek.pl",
+                "Email 1": "kontakt@kawiarnia-zloty-kubek.pl, literowka@gmail.coml",
+            })
+
+        out = mod.sync_csv_to_attio(
+            csv_path,
+            offline_dry_run=True,
+            lead_batch="2026-11-25 | test-batch",
+            save_report=True,
+            report_path=report_file,
+        )
+        assert report_file.exists()
+        assert out["stats"]["skipped_non_icp"] == 1
+        assert out["stats"]["inferred_company_names"] == 1
+        assert out["stats"]["rejected_syntax_or_typo_emails"] == 1
+        assert out["stats"]["candidate_companies"] == 1
+        assert out["audit"]["inferred_names"][0]["resolved_name"] == "Kawiarnia Zloty Kubek"

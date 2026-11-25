@@ -4090,12 +4090,16 @@ def append_to_csv_master(data, csv_path):
         from attio_sync import (
             business_domain as _biz_domain,
             extract_social_links as _extract_socials,
+            is_non_icp_business as _is_non_icp,
             resolve_company_name as _resolve_name,
+            validate_email_syntax as _val_email_syn,
         )
     except ImportError:
         _biz_domain = lambda u: ''
         _extract_socials = lambda *a: {'facebook': '', 'instagram': ''}
+        _is_non_icp = lambda **kw: (False, '')
         _resolve_name = lambda raw, **kw: strip_emoji(raw or '').strip()
+        _val_email_syn = lambda e: (True, '')
 
     seen_phones: set = set()
     seen_domains: set = set()
@@ -4141,7 +4145,10 @@ def append_to_csv_master(data, csv_path):
         socials = _extract_socials(item.get('facebook', ''), item.get('instagram', ''), website)
         fb = socials['facebook']
         ig = socials['instagram']
-        emails = [e for e in item.get('emails', []) if is_valid_email(e) and e.lower() not in _PLATFORM_EMAILS]
+        emails = [
+            e for e in item.get('emails', [])
+            if is_valid_email(e) and e.lower() not in _PLATFORM_EMAILS and _val_email_syn(e)[0]
+        ]
         emails_low = {e.lower() for e in emails}
 
         clean_name = _resolve_name(
@@ -4155,6 +4162,9 @@ def append_to_csv_master(data, csv_path):
         )
         if not clean_name or len(clean_name) < 3 or re.search(r'^[\d,/\\@\s]+$', clean_name):
             logger.debug("Pominięto rekord bez czytelnej nazwy: %r", raw_name)
+            continue
+        if _is_non_icp(name=clean_name, website=website, raw_industry=item.get('branża', ''))[0]:
+            logger.info("Pominięto rekord spoza ICP: %s (%s)", clean_name, website)
             continue
 
         nm = normalize_name(clean_name)
@@ -4862,11 +4872,13 @@ def main():
         if (args.sync_attio or args.attio_dry_run) and sync_csv_to_attio is not None:
             try:
                 logger.info("Synchronizing CSV master to Attio (%s)...", "dry-run" if args.attio_dry_run else "apply")
+                batch_label = f"{datetime.now().strftime('%Y-%m-%d')} | {query}-{location}"
                 attio_report = sync_csv_to_attio(
                     csv_master_path,
                     dry_run=args.attio_dry_run,
                     ensure_schema=True,
                     sync_people=True,
+                    lead_batch=batch_label,
                 )
                 logger.info("Attio sync complete: %s", json.dumps(attio_report.get("stats", {}), ensure_ascii=False))
             except Exception as exc:
