@@ -284,13 +284,17 @@ CATEGORY_KEYWORDS = {
         "spa hotel", "wellness hotel",
     ],
     "restaurant": [
-        "restaurant", "restauracja", "restauracje", "bistro", "bar", "kawiarnia", "cafe",
-        "caffe", "trattoria", "pizzeria", "sushi", "grill", "gastro", "gastronomia",
+        "restaurant", "restauracja", "restauracje", "bistro", "bar",
+        "trattoria", "pizzeria", "sushi", "grill", "gastro", "gastronomia",
         "jadłodajnia", "bar mleczny", "food", "kuchnia",
+    ],
+    "kawiarnia": [
+        "kawiarnia", "kawiarnie", "cafe", "caffe", "coffee", "cukiernia",
+        "palarnia kawy", "espresso",
     ],
 }
 
-CATEGORY_PRIORITY = ["spa", "wellness", "joga", "fizjoterapia", "uroda", "fryzjer", "hotel", "restaurant"]
+CATEGORY_PRIORITY = ["spa", "wellness", "joga", "fizjoterapia", "uroda", "fryzjer", "hotel", "kawiarnia", "restaurant"]
 
 
 def map_query_to_category(query):
@@ -3200,10 +3204,60 @@ def _rebuild_branza_sheets(wb, template_path):
     from openpyxl.styles import PatternFill, Font, Alignment
 
     KNOWN_BRANZE = {
-        "spa": "Spa", "joga": "Joga", "fizjoterapia": "Fizjoterapia",
-        "uroda": "Uroda", "fryzjer": "Fryzjer", "hotel": "Hotel",
-        "hotel-spa": "Hotel-Spa",
-        "restaurant": "Restaurant", "masaz": "Masaż", "masaż": "Masaż",
+        # Kanoniczne 12 branż SoundYou (Attio) + klucze EN/PL -> bezpieczne nazwy arkuszy Excel (bez '/')
+        "spa": "SPA & Wellness",
+        "wellness": "SPA & Wellness",
+        "spa & wellness": "SPA & Wellness",
+        "health & wellness": "SPA & Wellness",
+        "masaz": "Kobido & Masaż",
+        "masaż": "Kobido & Masaż",
+        "massage": "Kobido & Masaż",
+        "kobido": "Kobido & Masaż",
+        "kobido & masaż": "Kobido & Masaż",
+        "uroda": "Beauty - Salon Urody",
+        "beauty": "Beauty - Salon Urody",
+        "beauty salon": "Beauty - Salon Urody",
+        "beauty / salon urody": "Beauty - Salon Urody",
+        "hotel": "Hotele i Pensjonaty",
+        "hotels": "Hotele i Pensjonaty",
+        "hotele": "Hotele i Pensjonaty",
+        "hotele i pensjonaty": "Hotele i Pensjonaty",
+        "resort": "Hotele i Pensjonaty",
+        "restaurant": "Restauracje",
+        "restaurants": "Restauracje",
+        "restauracja": "Restauracje",
+        "restauracje": "Restauracje",
+        "kawiarnia": "Kawiarnie",
+        "kawiarnie": "Kawiarnie",
+        "cafe": "Kawiarnie",
+        "coffee": "Kawiarnie",
+        "coffee shop": "Kawiarnie",
+        "fitness": "Fitness - Siłownia",
+        "gym": "Fitness - Siłownia",
+        "siłownia": "Fitness - Siłownia",
+        "fitness / siłownia": "Fitness - Siłownia",
+        "joga": "Joga - Pilates - Medytacja",
+        "yoga": "Joga - Pilates - Medytacja",
+        "pilates": "Joga - Pilates - Medytacja",
+        "meditation": "Joga - Pilates - Medytacja",
+        "joga / pilates / medytacja": "Joga - Pilates - Medytacja",
+        "fryzjer": "Salon Fryzjerski - Barber",
+        "hairdresser": "Salon Fryzjerski - Barber",
+        "hair salon": "Salon Fryzjerski - Barber",
+        "barber": "Salon Fryzjerski - Barber",
+        "salon fryzjerski / barber": "Salon Fryzjerski - Barber",
+        "fizjoterapia": "Poczekalnia - Gabinet",
+        "physiotherapy": "Poczekalnia - Gabinet",
+        "clinic": "Poczekalnia - Gabinet",
+        "gabinet": "Poczekalnia - Gabinet",
+        "poczekalnia / gabinet": "Poczekalnia - Gabinet",
+        "sklep": "Sklep - Retail",
+        "shop": "Sklep - Retail",
+        "retail": "Sklep - Retail",
+        "sklep / retail": "Sklep - Retail",
+        "inne": "Lokal Usługowy - Inne",
+        "other": "Lokal Usługowy - Inne",
+        "lokal usługowy / inne": "Lokal Usługowy - Inne",
     }
 
     if 'Wszystkie' not in wb.sheetnames:
@@ -3232,18 +3286,33 @@ def _rebuild_branza_sheets(wb, template_path):
             continue  # city header row
         data_rows.append(row_list)
 
-    # Group by sheet name
+    # Group by sheet name (supports comma-separated multiselect values like "SPA & Wellness, Hotele i Pensjonaty")
     branza_groups = defaultdict(list)
     for row in data_rows:
-        raw = str(row[branza_col_idx] or '').lower().strip()
-        sheet_name = KNOWN_BRANZE.get(raw, 'Inne') if raw else 'Inne'
-        branza_groups[sheet_name].append(row)
+        raw_cell = str(row[branza_col_idx] or '').strip()
+        tokens = [t.strip().lower() for t in re.split(r'[,;|]+', raw_cell) if t.strip()]
+        target_sheets = []
+        for tok in tokens:
+            if tok in ('hotel-spa', 'hotel spa', 'hotel & spa', 'spa hotel'):
+                target_sheets.extend(['Hotele i Pensjonaty', 'SPA & Wellness'])
+            else:
+                target_sheets.append(KNOWN_BRANZE.get(tok, 'Lokal Usługowy - Inne'))
+        if not target_sheets:
+            target_sheets = ['Lokal Usługowy - Inne']
+        for sheet_name in dict.fromkeys(target_sheets):
+            branza_groups[sheet_name].append(row)
 
     header_fill = PatternFill(start_color='1F4E78', end_color='1F4E78', fill_type='solid')
     header_font = Font(color='FFFFFF', bold=True)
     header_align = Alignment(horizontal='center')
 
-    sheet_order = ['Spa', 'Joga', 'Fizjoterapia', 'Uroda', 'Fryzjer', 'Masaż', 'Hotel', 'Hotel-Spa', 'Restaurant', 'Inne']
+    sheet_order = [
+        'SPA & Wellness', 'Kobido & Masaż', 'Beauty - Salon Urody',
+        'Hotele i Pensjonaty', 'Restauracje', 'Kawiarnie',
+        'Fitness - Siłownia', 'Joga - Pilates - Medytacja',
+        'Salon Fryzjerski - Barber', 'Poczekalnia - Gabinet',
+        'Sklep - Retail', 'Lokal Usługowy - Inne',
+    ]
 
     for sheet_name, rows in branza_groups.items():
         # Remove existing sheet and recreate
@@ -4024,6 +4093,8 @@ def main():
     parser.add_argument("--use-headless", action="store_true", default=True, help="Use headless Chrome for JS/blocked pages (default: on)")
     parser.add_argument("--no-headless", dest="use_headless", action="store_false", help="Disable headless browser")
     parser.add_argument("--headless-wait", type=int, default=3, help="Seconds to wait after render in headless mode")
+    parser.add_argument("--sync-attio", action="store_true", help="Automatically sync deduplicated CSV leads to Attio after scraping")
+    parser.add_argument("--attio-dry-run", action="store_true", help="Run Attio sync in dry-run mode (no writes)")
     args = parser.parse_args()
 
     # Walidacja: odrzuć argumenty wyglądające jak ścieżki pliku (artefakty bat/shell)
@@ -4103,17 +4174,24 @@ def main():
         print("   SCRAPER CONFIGURATION WIZARD")
         print("="*40)
         
-        # 1. Choose Industry
+        # 1. Choose Industry (PL / EN aligned with Attio `soundyou_industry`)
         print("\nSTEP 1/3: Choose industry")
-        known_industries = ["spa", "joga", "fizjoterapia", "uroda", "fryzjer", "hotel", "restaurant"]
+        known_industries = [
+            "spa", "masaż", "uroda", "hotel", "restaurant", "kawiarnia",
+            "fitness", "joga", "fryzjer", "fizjoterapia", "sklep",
+        ]
         industry_labels = {
-            "spa":         "SPA / Massage / Wellness / Kobido",
-            "joga":        "Yoga",
-            "fizjoterapia":"Physiotherapy",
-            "uroda":       "Beauty",
-            "fryzjer":     "Hairdresser",
-            "hotel":       "Hotel",
-            "restaurant":  "Restaurant",
+            "spa":         "SPA & Wellness (EN: spa / wellness)",
+            "masaż":       "Kobido & Masaż (EN: massage / kobido)",
+            "uroda":       "Beauty / Salon Urody (EN: beauty salon)",
+            "hotel":       "Hotele i Pensjonaty (EN: hotel / resort)",
+            "restaurant":  "Restauracje (EN: restaurant / bistro)",
+            "kawiarnia":   "Kawiarnie (EN: cafe / coffee shop)",
+            "fitness":     "Fitness / Siłownia (EN: gym / fitness)",
+            "joga":        "Joga / Pilates / Medytacja (EN: yoga / pilates)",
+            "fryzjer":     "Salon Fryzjerski / Barber (EN: hairdresser / barber)",
+            "fizjoterapia":"Poczekalnia / Gabinet (EN: clinic / physiotherapy)",
+            "sklep":       "Sklep / Retail (EN: shop / boutique / retail)",
         }
         for i, k in enumerate(known_industries, 1):
             print(f"{i}. {industry_labels.get(k, k.upper())}")
@@ -4555,11 +4633,27 @@ def main():
         _r.setdefault('miasto', location)
         _r.setdefault('województwo', selected_voivodeship)
 
-    # Reklasyfikacja: hotele, które trafiły do wyników spa/wellness/beauty/masaż
+    # Kanoniczna klasyfikacja branż SoundYou (multiselect, spójna z Attio `soundyou_industry`)
+    try:
+        from attio_sync import classify_soundyou_industries, sync_csv_to_attio
+    except ImportError:
+        classify_soundyou_industries = None
+        sync_csv_to_attio = None
+
     _SPA_LIKE = {"spa", "uroda", "fryzjer", "masaz", "masaż", "wellness", "fizjoterapia", "joga"}
     for _r in all_results:
-        if _r.get('branża', '').lower() in _SPA_LIKE and _is_hotel_record(_r):
-            _r['branża'] = 'hotel-spa'
+        raw_branza = _r.get('branża', '')
+        if raw_branza.lower() in _SPA_LIKE and _is_hotel_record(_r):
+            raw_branza = 'hotel-spa'
+        if classify_soundyou_industries is not None:
+            canonical = classify_soundyou_industries(
+                raw_branza,
+                name=_r.get('name', ''),
+                website=_r.get('website', ''),
+            )
+            _r['branża'] = ', '.join(canonical)
+        else:
+            _r['branża'] = raw_branza
 
     # Save all data
     if all_results:
@@ -4573,6 +4667,19 @@ def main():
         csv_master_path = os.path.join(OUTPUT_DIR, 'SoundYouLeads.csv')
         append_to_csv_master(all_results, csv_master_path)
         logger.info("Appended %d records to CSV master: %s", len(all_results), csv_master_path)
+
+        if (args.sync_attio or args.attio_dry_run) and sync_csv_to_attio is not None:
+            try:
+                logger.info("Synchronizing CSV master to Attio (%s)...", "dry-run" if args.attio_dry_run else "apply")
+                attio_report = sync_csv_to_attio(
+                    csv_master_path,
+                    dry_run=args.attio_dry_run,
+                    ensure_schema=True,
+                    sync_people=True,
+                )
+                logger.info("Attio sync complete: %s", json.dumps(attio_report.get("stats", {}), ensure_ascii=False))
+            except Exception as exc:
+                logger.error("Attio sync failed: %s", exc)
     else:
         logger.info("No data to save.")
 
