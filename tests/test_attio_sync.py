@@ -201,7 +201,116 @@ class TestSchemaAndSync:
         assert summary2["attribute_created"] is False
         assert summary2["options_created"] == []
 
-    def test_sync_creates_new_and_enriches_existing_without_duplicates(self):
+    def test_default_sync_strictly_skips_existing_leads_by_any_signal(self):
+        client = FakeAttioClient(
+            companies=[
+                {
+                    "id": {"record_id": "existing-dom"},
+                    "values": {
+                        "name": [{"value": "Jasmine Spa"}],
+                        "domains": [{"domain": "jasminespa.pl"}],
+                        "primary_location": [{"locality": "Wrocław"}],
+                        "description": [{"value": "Existing manual description"}],
+                        mod.INDUSTRY_ATTR_SLUG: [{"option": {"title": "SPA & Wellness"}}],
+                    },
+                },
+                {
+                    "id": {"record_id": "existing-phone"},
+                    "values": {
+                        "name": [{"value": "LadyTamaris Spa"}],
+                        "domains": [],
+                        "primary_location": [{"locality": "Olawa", "postcode": "55-200"}],
+                        "description": [{"value": "Źródło: Web-Crunchy-Scrap\nTelefony: +48790545002"}],
+                        mod.INDUSTRY_ATTR_SLUG: [{"option": {"title": "SPA & Wellness"}}],
+                    },
+                },
+            ],
+            people=[
+                {
+                    "id": {"record_id": "existing-pers-1"},
+                    "values": {
+                        "email_addresses": [{"email_address": "kontakt@istniejacy.pl"}],
+                        "company": [],
+                    },
+                }
+            ],
+        )
+
+        leads = [
+            # 1. Istnieje po domenie -> musi zostać pominięty (0 zapisów)
+            mod.Lead(
+                name="Jasmine Spa & Masaż Tajski",
+                city="Wrocław",
+                region="Dolnośląskie",
+                address="Rynek 1, 50-101 Wrocław",
+                industries={"SPA & Wellness", "Kobido & Masaż"},
+                emails={"nowy@jasminespa.pl"},
+                phones={"+48500100200"},
+                domains={"jasminespa.pl"},
+            ),
+            # 2. Istnieje po telefonie z opisu (mimo innego miasta Jaczkowice vs Olawa) -> pominięty
+            mod.Lead(
+                name="LadyTamaris Spa",
+                city="Jaczkowice",
+                region="Dolnośląskie",
+                address="Słoneczna 3, 55-200 Jaczkowice",
+                industries={"SPA & Wellness"},
+                emails=set(),
+                phones={"+48790545002"},
+                domains=set(),
+            ),
+            # 3. Istnieje po e-mailu w People -> pominięty
+            mod.Lead(
+                name="Gabinet Istniejący",
+                city="Katowice",
+                region="Śląskie",
+                address="Główna 2, 40-001 Katowice",
+                industries={"SPA & Wellness"},
+                emails={"kontakt@istniejacy.pl"},
+                phones=set(),
+                domains=set(),
+            ),
+            # 4. Zupełnie nowy lead -> jako jedyny dodany do Attio
+            mod.Lead(
+                name="Hotel Słoneczny & SPA",
+                city="Katowice",
+                region="Śląskie",
+                address="Słoneczna 5, 40-100 Katowice",
+                industries={"Hotele i Pensjonaty", "SPA & Wellness"},
+                emails={"biuro@hotelsloneczny.pl"},
+                phones={"+48600700800"},
+                domains={"hotelsloneczny.pl"},
+            ),
+            # 5. Duplikat tego samego nowego leada w tym samym batchu -> pominięty
+            mod.Lead(
+                name="Inna Nazwa Tego Samego Hotelu",
+                city="Chorzów",
+                region="Śląskie",
+                address="",
+                industries={"Hotele i Pensjonaty"},
+                emails=set(),
+                phones={"+48600700800"},
+                domains=set(),
+            ),
+        ]
+
+        stats = Counter()
+        domain_counts = Counter({"jasminespa.pl": 1, "hotelsloneczny.pl": 1})
+
+        res = mod.sync_leads_to_attio(client, leads, stats, domain_counts, dry_run=False, sync_people=True)
+        st = res["stats"]
+        assert st["skipped_existing_companies"] == 4
+        assert st["created_companies"] == 1
+        assert st.get("updated_companies", 0) == 0
+        assert st["created_people"] == 1
+
+        patch_calls = [c for c in client.calls if c[0] == "PATCH"]
+        post_comp_calls = [c for c in client.calls if c[0] == "POST" and c[1] == "/objects/companies/records"]
+        assert patch_calls == []
+        assert len(post_comp_calls) == 1
+        assert post_comp_calls[0][2]["data"]["values"]["name"] == "Hotel Słoneczny & SPA"
+
+    def test_opt_in_enrich_existing_updates_missing_industries(self):
         client = FakeAttioClient(
             companies=[
                 {
@@ -215,17 +324,7 @@ class TestSchemaAndSync:
                     },
                 }
             ],
-            people=[
-                {
-                    "id": {"record_id": "existing-pers-1"},
-                    "values": {
-                        "email_addresses": [{"email_address": "recepcja@jasminespa.pl"}],
-                        "company": [],
-                    },
-                }
-            ],
         )
-
         leads = [
             mod.Lead(
                 name="Jasmine Spa & Masaż Tajski",
@@ -233,37 +332,16 @@ class TestSchemaAndSync:
                 region="Dolnośląskie",
                 address="Rynek 1, 50-101 Wrocław",
                 industries={"SPA & Wellness", "Kobido & Masaż"},
-                emails={"recepcja@jasminespa.pl", "nowy@jasminespa.pl"},
+                emails=set(),
                 phones={"+48500100200"},
                 domains={"jasminespa.pl"},
             ),
-            mod.Lead(
-                name="Hotel Słoneczny & SPA",
-                city="Katowice",
-                region="Śląskie",
-                address="Słoneczna 5, 40-100 Katowice",
-                industries={"Hotele i Pensjonaty", "SPA & Wellness"},
-                emails={"biuro@hotelsloneczny.pl"},
-                phones={"+48600700800"},
-                domains={"hotelsloneczny.pl"},
-            ),
         ]
-
-        stats = Counter()
-        domain_counts = Counter({"jasminespa.pl": 1, "hotelsloneczny.pl": 1})
-
-        res = mod.sync_leads_to_attio(client, leads, stats, domain_counts, dry_run=False, sync_people=True)
-        st = res["stats"]
-        assert st["updated_companies"] == 1
-        assert st["created_companies"] == 1
-        assert st["linked_existing_people"] == 1
-        assert st["created_people"] == 2
-
-        patch_calls = [c for c in client.calls if c[0] == "PATCH" and c[1] == "/objects/companies/records/existing-comp-1"]
-        assert len(patch_calls) == 1
-        assert patch_calls[0][2]["data"]["values"] == {
-            mod.INDUSTRY_ATTR_SLUG: ["SPA & Wellness", "Kobido & Masaż"]
-        }
+        res = mod.sync_leads_to_attio(
+            client, leads, Counter(), Counter({"jasminespa.pl": 1}),
+            dry_run=False, sync_people=True, enrich_existing=True,
+        )
+        assert res["stats"]["updated_companies"] == 1
 
     def test_dry_run_makes_no_write_requests(self):
         client = FakeAttioClient()
@@ -284,3 +362,97 @@ class TestSchemaAndSync:
         assert res["stats"]["created_people"] == 1
         write_calls = [c for c in client.calls if c[0] in ("POST", "PATCH", "PUT", "DELETE")]
         assert write_calls == []
+
+
+# ─── Social links & automatic company name resolution ───────────────────────
+
+class TestSocialAndNameResolution:
+    def test_extracts_clean_instagram_and_facebook_and_ignores_directories(self):
+        soc = mod.extract_social_links(
+            "https://www.instagram.com/booksypl/",
+            "https://www.instagram.com/kobido.studio.wroclaw/?hl=pl",
+            "https://www.facebook.com/sharer/sharer.php?u=test",
+            "https://m.facebook.com/SalonUrodyMagnolia-102938475610293/",
+        )
+        assert soc == {
+            "instagram": "https://www.instagram.com/kobido.studio.wroclaw",
+            "facebook": "https://www.facebook.com/SalonUrodyMagnolia-102938475610293",
+        }
+
+    def test_resolves_name_from_facebook_or_instagram_when_name_missing_or_generic(self):
+        # Brak nazwy -> z Facebooka (obcina ID strony, rozdziela CamelCase)
+        assert mod.resolve_company_name(
+            "",
+            facebook="https://www.facebook.com/SalonUrodyMagnolia-102938475610293",
+        ) == "Salon Urody Magnolia"
+
+        # Generyczna nazwa "Strona Główna" -> z Instagrama
+        assert mod.resolve_company_name(
+            "Strona Główna",
+            instagram="https://www.instagram.com/kobido.studio.krakow/",
+        ) == "Kobido Studio Krakow"
+
+    def test_resolves_name_from_website_domain_and_glued_brand_tokens(self):
+        assert mod.resolve_company_name("", website="https://www.enklawaspa.com") == "Enklawa SPA"
+        assert mod.resolve_company_name("Home", website="https://safari-wellness.pl") == "Safari Wellness"
+
+    def test_resolves_name_from_business_email_and_freemail_local_part(self):
+        # Domena firmowa w e-mailu
+        assert mod.resolve_company_name(
+            "Brak",
+            emails=["recepcja@hotelmarta.com.pl"],
+        ) == "Hotel Marta"
+
+        # Skrzynka @gmail.com z nazwą salonu przed '@'
+        assert mod.resolve_company_name(
+            "",
+            emails=["yin.studiospa@gmail.com"],
+        ) == "Yin Studio SPA"
+
+        assert mod.resolve_company_name(
+            "R. · f4e63e42",
+            emails=["ladna.ja2024@gmail.com"],
+        ) == "Ladna Ja"
+
+    def test_keeps_clear_scraped_name_untouched(self):
+        assert mod.resolve_company_name(
+            "Hotel Dwór Elizy ✨",
+            website="https://dwor-elizy.pl",
+            instagram="https://www.instagram.com/dworelizy",
+        ) == "Hotel Dwór Elizy"
+
+    def test_csv_row_without_name_recovers_from_instagram_and_populates_attio_social_fields(self, tmp_path: Path):
+        csv_path = tmp_path / "social_leads.csv"
+        headers = [
+            "Branża", "Województwo", "Miasto", "Name", "Address", "Phone",
+            "Website", "Facebook", "Instagram", "Email 1", "Sources",
+        ]
+        with csv_path.open("w", encoding="utf-8", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=headers)
+            w.writeheader()
+            w.writerow({
+                "Branża": "spa",
+                "Województwo": "Dolnośląskie",
+                "Miasto": "Wrocław",
+                "Name": "Strona główna",
+                "Address": "Rynek 12, 50-101 Wrocław",
+                "Phone": "",
+                "Website": "https://www.instagram.com/atelier_kobido_wroclaw/",
+                "Facebook": "https://www.facebook.com/AtelierKobidoWroclaw",
+                "Instagram": "",
+                "Email 1": "",
+                "Sources": "google",
+            })
+
+        leads, stats, _ = mod.load_and_dedup_csv([csv_path])
+        assert len(leads) == 1
+        assert stats["inferred_company_names"] == 1
+        lead = leads[0]
+        assert lead.name == "Atelier Kobido Wroclaw"
+        assert lead.facebook == "https://www.facebook.com/AtelierKobidoWroclaw"
+        assert lead.instagram == "https://www.instagram.com/atelier_kobido_wroclaw"
+        assert "Kobido & Masaż" in lead.industries
+
+        vals = lead.company_values()
+        assert vals["facebook"] == "https://www.facebook.com/AtelierKobidoWroclaw"
+        assert vals["instagram"] == "https://www.instagram.com/atelier_kobido_wroclaw"

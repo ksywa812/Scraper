@@ -268,16 +268,28 @@ CATEGORY_KEYWORDS = {
         "masaz lomi", "masaz tkanek", "masaz goracymi kamieniami",
         "masaz aroma", "aromaterapia", "bodywork", "kobido"
     ],
-    "joga": ["joga", "yoga", "hatha", "vinyasa", "ashtanga", "yin", "kundalini", "joga nidra"],
-    "fizjoterapia": ["fizjoterapia", "rehabilitacja", "fizjo", "terapia manualna", "kinezyterapia"],
+    "joga": [
+        "joga", "yoga", "pilates", "medytacja", "meditation", "mindfulness",
+        "hatha", "vinyasa", "ashtanga", "yin", "kundalini", "joga nidra",
+    ],
+    "fitness": [
+        "fitness", "siłownia", "silownia", "gym", "klub fitness", "fitness club",
+        "crossfit", "trening personalny", "personal training",
+    ],
+    "fizjoterapia": [
+        "fizjoterapia", "rehabilitacja", "fizjo", "terapia manualna", "kinezyterapia",
+        "osteopatia", "poczekalnia", "gabinet", "klinika", "przychodnia",
+        "stomatolog", "dentysta", "dental",
+    ],
     "uroda": [
-        "uroda", "salon kosmetyczny", "kosmetyczka", "kosmetologia", "makijaz",
-        "makijaż", "depilacja", "paznokcie", "manicure", "pedicure", "brwi",
-        "rzesy", "rzęsy", "lifting", "mezoterapia", "medycyna estetyczna",
+        "uroda", "beauty", "beauty salon", "salon urody", "salon kosmetyczny",
+        "kosmetyczka", "kosmetologia", "makijaz", "makijaż", "depilacja",
+        "paznokcie", "manicure", "pedicure", "brwi", "rzesy", "rzęsy",
+        "lifting", "mezoterapia", "medycyna estetyczna",
     ],
     "fryzjer": [
         "fryzjer", "fryzjerstwo", "salon fryzjerski", "barber", "barbershop",
-        "strzyżenie", "koloryzacja", "keratyna", "farbowanie wlosow",
+        "hair salon", "hairdresser", "strzyżenie", "koloryzacja", "keratyna", "farbowanie wlosow",
     ],
     "hotel": [
         "hotel", "hotel spa", "hotel & spa", "resort", "pensjonat", "aparthotel",
@@ -289,12 +301,18 @@ CATEGORY_KEYWORDS = {
         "jadłodajnia", "bar mleczny", "food", "kuchnia",
     ],
     "kawiarnia": [
-        "kawiarnia", "kawiarnie", "cafe", "caffe", "coffee", "cukiernia",
-        "palarnia kawy", "espresso",
+        "kawiarnia", "kawiarnie", "cafe", "caffe", "coffee", "coffee shop",
+        "cukiernia", "palarnia kawy", "espresso", "bakery",
+    ],
+    "sklep": [
+        "sklep", "butik", "boutique", "retail", "shop", "store", "showroom",
     ],
 }
 
-CATEGORY_PRIORITY = ["spa", "wellness", "joga", "fizjoterapia", "uroda", "fryzjer", "hotel", "kawiarnia", "restaurant"]
+CATEGORY_PRIORITY = [
+    "spa", "wellness", "joga", "fitness", "fizjoterapia",
+    "uroda", "fryzjer", "hotel", "kawiarnia", "restaurant", "sklep",
+]
 
 
 def map_query_to_category(query):
@@ -762,11 +780,15 @@ def clean_booksy_name(text):
 
 
 def extract_booksy_profile_data(profile_url, session=None):
-    """Extract website, email, and phone from a Booksy profile via __NUXT__ data."""
-    result = {'website': '', 'emails': [], 'phone': ''}
+    """Extract website, social links (Facebook/Instagram), email, and phone from a Booksy profile via __NUXT__ data."""
+    result = {'website': '', 'facebook': '', 'instagram': '', 'emails': [], 'phone': ''}
     if not profile_url:
         return result
     session = session or create_session()
+    try:
+        from attio_sync import extract_social_links
+    except ImportError:
+        extract_social_links = lambda *a: {'facebook': '', 'instagram': ''}
     try:
         resp = session.get(profile_url, headers={'User-Agent': get_random_user_agent()}, timeout=15)
         resp.raise_for_status()
@@ -795,12 +817,20 @@ def extract_booksy_profile_data(profile_url, session=None):
                 continue
             decoded = text.replace('\\u002F', '/')
 
-            # Extract website
+            # Extract website (lub link social media jeśli podano go jako stronę WWW)
             website_match = re.search(r'website:"(https?://[^"]+)"', decoded)
             if website_match:
                 w = website_match.group(1)
                 if is_valid_external(w):
                     result['website'] = w
+                else:
+                    soc = extract_social_links(w)
+                    result['facebook'] = result['facebook'] or soc['facebook']
+                    result['instagram'] = result['instagram'] or soc['instagram']
+
+            soc_all = extract_social_links(decoded)
+            result['facebook'] = result['facebook'] or soc_all['facebook']
+            result['instagram'] = result['instagram'] or soc_all['instagram']
 
             # Extract phone
             phone_match = re.search(r'phone:"([^"]+)"', decoded)
@@ -2953,6 +2983,67 @@ def _deobfuscate_emails(text):
     return text
 
 
+_WEBSITE_META_CACHE: dict = {}
+
+
+def _extract_social_and_title_from_soup(soup):
+    """Wyciąga linki Facebook/Instagram oraz nazwę marki (og:site_name / JSON-LD / <title>) ze sparsowanego HTML."""
+    meta = {'facebook': '', 'instagram': '', 'site_title': ''}
+    if soup is None:
+        return meta
+    try:
+        from attio_sync import extract_social_links, is_unclear_company_name
+    except ImportError:
+        return meta
+
+    hrefs = [a.get('href', '').strip() for a in soup.find_all('a', href=True)]
+    soc = extract_social_links(*hrefs)
+    meta['facebook'] = soc['facebook']
+    meta['instagram'] = soc['instagram']
+
+    # 1. meta og:site_name
+    og = soup.find('meta', attrs={'property': 'og:site_name'}) or soup.find('meta', attrs={'name': 'application-name'})
+    if og and og.get('content'):
+        cand = og['content'].strip()
+        if not is_unclear_company_name(cand):
+            meta['site_title'] = cand
+
+    # 2. JSON-LD Organization / LocalBusiness (nazwa + sameAs social media)
+    for script in soup.find_all('script', type='application/ld+json'):
+        try:
+            ld = json.loads(script.get_text(strip=True))
+            items = ld if isinstance(ld, list) else [ld]
+            for it in items:
+                if not isinstance(it, dict):
+                    continue
+                if not meta['site_title'] and isinstance(it.get('name'), str):
+                    cand = it['name'].strip()
+                    if not is_unclear_company_name(cand):
+                        meta['site_title'] = cand
+                same_as = it.get('sameAs')
+                if isinstance(same_as, list):
+                    s2 = extract_social_links(*[str(x) for x in same_as])
+                    meta['facebook'] = meta['facebook'] or s2['facebook']
+                    meta['instagram'] = meta['instagram'] or s2['instagram']
+                elif isinstance(same_as, str):
+                    s2 = extract_social_links(same_as)
+                    meta['facebook'] = meta['facebook'] or s2['facebook']
+                    meta['instagram'] = meta['instagram'] or s2['instagram']
+        except Exception:
+            continue
+
+    # 3. Fallback: pierwszy niegeneryczny człon <title>
+    if not meta['site_title'] and soup.title and soup.title.string:
+        raw_t = soup.title.string.strip()
+        for part in re.split(r'\s*[\|–—•·]\s*|\s+-\s+', raw_t):
+            p_clean = part.strip()
+            if p_clean and not is_unclear_company_name(p_clean) and len(p_clean) <= 70:
+                meta['site_title'] = p_clean
+                break
+
+    return meta
+
+
 def extract_emails_from_website(url, session=None, cache_conn=None, respect_robots=False, use_headless=False, headless_wait=3):
     """Extracts email addresses from a website."""
     if not url:
@@ -2999,6 +3090,7 @@ def extract_emails_from_website(url, session=None, cache_conn=None, respect_robo
         
         # Also, get emails from contact pages if available
         soup = BeautifulSoup(response.text, 'html.parser')
+        _WEBSITE_META_CACHE[url] = _extract_social_and_title_from_soup(soup)
         
         # Check subpages like "kontakt" or "contact"
         contact_links = []
@@ -3983,15 +4075,33 @@ def save_to_csv(data, filename):
 def append_to_csv_master(data, csv_path):
     """Append new records to the cumulative CSV master file.
 
-    Reads existing rows (if any) and deduplicates by normalized (name, phone)
-    before appending, so each business appears only once even across multiple runs.
+    Reads existing rows (if any) and deduplicates by normalized phone (+48 stripped),
+    business domain, Facebook/Instagram URL, email address, and normalized (name, city)
+    before appending. Automatically resolves unclear/missing company names from
+    website, Instagram, Facebook, or email.
     """
-    CSV_HEADERS = ['Branża', 'Województwo', 'Miasto', 'Name', 'Address', 'Phone', 'Website', 'Email 1', 'Email 2', 'Email 3', 'Other Emails', 'Sources']
+    CSV_HEADERS = [
+        'Branża', 'Województwo', 'Miasto', 'Name', 'Address', 'Phone',
+        'Website', 'Facebook', 'Instagram',
+        'Email 1', 'Email 2', 'Email 3', 'Other Emails', 'Sources',
+    ]
 
-    def _norm(s):
-        return re.sub(r'[\s\-\(\)]+', '', str(s or '')).lower()
+    try:
+        from attio_sync import (
+            business_domain as _biz_domain,
+            extract_social_links as _extract_socials,
+            resolve_company_name as _resolve_name,
+        )
+    except ImportError:
+        _biz_domain = lambda u: ''
+        _extract_socials = lambda *a: {'facebook': '', 'instagram': ''}
+        _resolve_name = lambda raw, **kw: strip_emoji(raw or '').strip()
 
-    existing_keys: set = set()
+    seen_phones: set = set()
+    seen_domains: set = set()
+    seen_socials: set = set()
+    seen_emails: set = set()
+    seen_name_city: set = set()
     existing_rows: list = []
 
     os.makedirs(os.path.dirname(csv_path) or '.', exist_ok=True)
@@ -4002,32 +4112,76 @@ def append_to_csv_master(data, csv_path):
                 reader = csv.DictReader(f)
                 for row in reader:
                     existing_rows.append(row)
-                    key = (_norm(row.get('Name', '')), _norm(row.get('Phone', '')))
-                    existing_keys.add(key)
+                    ph = normalize_phone(row.get('Phone', ''))
+                    if ph:
+                        seen_phones.add(ph)
+                    dom = _biz_domain(row.get('Website', ''))
+                    if dom:
+                        seen_domains.add(dom)
+                    soc_ex = _extract_socials(row.get('Facebook', ''), row.get('Instagram', ''), row.get('Website', ''))
+                    for s_url in soc_ex.values():
+                        if s_url:
+                            seen_socials.add(s_url.lower())
+                    nm = normalize_name(strip_emoji(row.get('Name', '')))
+                    ct = normalize_name(row.get('Miasto', ''))
+                    if nm:
+                        seen_name_city.add((nm, ct))
+                    for col in ('Email 1', 'Email 2', 'Email 3', 'Other Emails'):
+                        for em in re.split(r'[,;\s]+', row.get(col, '') or ''):
+                            em_l = em.strip().lower()
+                            if em_l and '@' in em_l and em_l not in _PLATFORM_EMAILS:
+                                seen_emails.add(em_l)
         except Exception as e:
             logger.warning("Could not read existing CSV master %s: %s", csv_path, e)
 
-    def _is_junk_record(item):
-        name = item.get('name', '').strip()
-        if not name or len(name) < 3:
-            return True
-        # Wiersze zawierające tylko cyfry, ukośniki, przecinki — artefakty CSV
-        if re.search(r'^[\d,/\\@\s]+$', name):
-            return True
-        return False
-
     new_rows = []
     for item in data:
-        if _is_junk_record(item):
-            logger.debug("Pominięto junk record: %r", item.get('name', ''))
-            continue
-        # Usuń emoji z nazwy przed zapisem
-        clean_name = strip_emoji(item.get('name', '')).strip()
-        key = (_norm(clean_name), _norm(item.get('formatted_phone_number', '')))
-        if key in existing_keys or key == ('', ''):
-            continue
-        existing_keys.add(key)
+        raw_name = item.get('name', '').strip()
+        website = item.get('website', '')
+        socials = _extract_socials(item.get('facebook', ''), item.get('instagram', ''), website)
+        fb = socials['facebook']
+        ig = socials['instagram']
         emails = [e for e in item.get('emails', []) if is_valid_email(e) and e.lower() not in _PLATFORM_EMAILS]
+        emails_low = {e.lower() for e in emails}
+
+        clean_name = _resolve_name(
+            raw_name,
+            site_title=item.get('site_title', ''),
+            website=website,
+            facebook=fb,
+            instagram=ig,
+            emails=emails,
+            city=item.get('miasto', ''),
+        )
+        if not clean_name or len(clean_name) < 3 or re.search(r'^[\d,/\\@\s]+$', clean_name):
+            logger.debug("Pominięto rekord bez czytelnej nazwy: %r", raw_name)
+            continue
+
+        nm = normalize_name(clean_name)
+        ct = normalize_name(item.get('miasto', ''))
+        ph = normalize_phone(item.get('formatted_phone_number', ''))
+        dom = _biz_domain(website)
+        item_socials = {s.lower() for s in (fb, ig) if s}
+
+        if not nm and not ph and not dom and not emails_low and not item_socials:
+            continue
+        if (
+            (ph and ph in seen_phones)
+            or (dom and dom in seen_domains)
+            or bool(item_socials & seen_socials)
+            or bool(emails_low & seen_emails)
+            or (nm and ((nm, ct) in seen_name_city or (nm, '') in seen_name_city))
+        ):
+            continue
+
+        if ph:
+            seen_phones.add(ph)
+        if dom:
+            seen_domains.add(dom)
+        seen_socials.update(item_socials)
+        seen_emails.update(emails_low)
+        if nm:
+            seen_name_city.add((nm, ct))
         new_rows.append({
             'Branża': item.get('branża', ''),
             'Województwo': item.get('województwo', ''),
@@ -4035,7 +4189,9 @@ def append_to_csv_master(data, csv_path):
             'Name': clean_name,
             'Address': item.get('formatted_address', ''),
             'Phone': item.get('formatted_phone_number', ''),
-            'Website': item.get('website', ''),
+            'Website': website,
+            'Facebook': fb,
+            'Instagram': ig,
             'Email 1': emails[0] if len(emails) > 0 else '',
             'Email 2': emails[1] if len(emails) > 1 else '',
             'Email 3': emails[2] if len(emails) > 2 else '',
@@ -4049,7 +4205,7 @@ def append_to_csv_master(data, csv_path):
 
     try:
         with open(csv_path, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=CSV_HEADERS)
+            writer = csv.DictWriter(f, fieldnames=CSV_HEADERS, extrasaction='ignore')
             writer.writeheader()
             writer.writerows(existing_rows)
             writer.writerows(new_rows)
@@ -4590,6 +4746,10 @@ def main():
                 if 'booksy.com' in profile_url:
                     pdata = extract_booksy_profile_data(profile_url, session=session)
                     external = pdata.get('website', '')
+                    if pdata.get('facebook'):
+                        result['facebook'] = result.get('facebook') or pdata['facebook']
+                    if pdata.get('instagram'):
+                        result['instagram'] = result.get('instagram') or pdata['instagram']
                     if pdata.get('emails'):
                         existing = result.get('emails') or []
                         result['emails'] = list(dict.fromkeys(existing + pdata['emails']))
@@ -4624,32 +4784,63 @@ def main():
                         headless_wait=args.headless_wait
                     )
                     result['emails'] = list(dict.fromkeys([e for e in emails if e]))
+                    wmeta = _WEBSITE_META_CACHE.get(website) or _WEBSITE_META_CACHE.get(
+                        website if website.startswith(('http://', 'https://')) else 'https://' + website
+                    )
+                    if wmeta:
+                        result['facebook'] = result.get('facebook') or wmeta.get('facebook', '')
+                        result['instagram'] = result.get('instagram') or wmeta.get('instagram', '')
+                        result['site_title'] = result.get('site_title') or wmeta.get('site_title', '')
                     # Delay to avoid overloading servers
                     time.sleep(random.uniform(1.0, 2.0))
-    
+
     # Inject metadata into every record before saving
     for _r in all_results:
         _r.setdefault('branża', query)
         _r.setdefault('miasto', location)
         _r.setdefault('województwo', selected_voivodeship)
 
-    # Kanoniczna klasyfikacja branż SoundYou (multiselect, spójna z Attio `soundyou_industry`)
+    # Kanoniczna klasyfikacja branż SoundYou + automatyczne ustalanie nazwy firmy i linków social media
     try:
-        from attio_sync import classify_soundyou_industries, sync_csv_to_attio
+        from attio_sync import (
+            classify_soundyou_industries,
+            extract_social_links,
+            resolve_company_name,
+            sync_csv_to_attio,
+        )
     except ImportError:
         classify_soundyou_industries = None
+        extract_social_links = None
+        resolve_company_name = None
         sync_csv_to_attio = None
 
     _SPA_LIKE = {"spa", "uroda", "fryzjer", "masaz", "masaż", "wellness", "fizjoterapia", "joga"}
     for _r in all_results:
+        if extract_social_links is not None:
+            soc = extract_social_links(_r.get('facebook', ''), _r.get('instagram', ''), _r.get('website', ''), _r.get('profile_url', ''))
+            _r['facebook'] = soc['facebook']
+            _r['instagram'] = soc['instagram']
+        if resolve_company_name is not None:
+            resolved = resolve_company_name(
+                _r.get('name', ''),
+                site_title=_r.get('site_title', ''),
+                website=_r.get('website', ''),
+                facebook=_r.get('facebook', ''),
+                instagram=_r.get('instagram', ''),
+                emails=_r.get('emails') or [],
+                city=_r.get('miasto', ''),
+            )
+            if resolved:
+                _r['name'] = resolved
         raw_branza = _r.get('branża', '')
         if raw_branza.lower() in _SPA_LIKE and _is_hotel_record(_r):
             raw_branza = 'hotel-spa'
         if classify_soundyou_industries is not None:
+            sig_urls = ' '.join(x for x in (_r.get('website', ''), _r.get('facebook', ''), _r.get('instagram', '')) if x)
             canonical = classify_soundyou_industries(
                 raw_branza,
                 name=_r.get('name', ''),
-                website=_r.get('website', ''),
+                website=sig_urls,
             )
             _r['branża'] = ', '.join(canonical)
         else:

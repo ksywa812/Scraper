@@ -1,7 +1,7 @@
-# Handoff: Integracja Web-Crunchy-Scrap CSV → Attio CRM (Branże SoundYou + Deduplikacja)
+# Handoff: Integracja Web-Crunchy-Scrap CSV → Attio CRM (Branże SoundYou, Deduplikacja, Social Media & Auto-Nazwa)
 
 **Data:** 2026-11-25  
-**Zakres:** Ujednolicenie taksonomii branżowej SoundYou (klucz EN ↔ PL, 12 opcji multiselect) między scraperem CSV/Excel a Attio CRM oraz wdrożenie bezpośredniej, zdeduplikowanej synchronizacji `Companies` + `People`.
+**Zakres:** Docelowy workflow `Scraper → CSV → Attio` ze ścisłą deduplikacją po stronie skryptu (istniejące leady w Attio są pomijane), automatycznym zbieraniem linków Facebook/Instagram, samodzielnym ustalaniem nazwy firmy z dostępnych danych oraz pełną zgodnością 1:1 z 12 branżami SoundYou (`soundyou_industry`).
 
 ---
 
@@ -9,7 +9,8 @@
 
 - **Workspace:** SoundYou (`soundyou`)
 - **Atrybut źródłowy na `Companies`:** `Branża SoundYou` (`api_slug: soundyou_industry`, typ `select`, `is_multiselect: true`, `attribute_id: 7972058f-4037-4ebf-b61e-c4c527a01c0d`)
-- **Dziedziczenie na `People`:** widoki `People` (`Kontakty Resend`, `Kontakty i firmy`) wyświetlają `Company → Branża SoundYou` automatycznie — nie ma potrzeby duplikowania pola branży na `People`.
+- **Natywne pola social media na `Companies`:** `facebook`, `instagram` (uzupełniane przez `attio_sync.py`)
+- **Dziedziczenie na `People`:** widoki `People` (`Kontakty Resend`, `Kontakty i firmy`) wyświetlają `Company → Branża SoundYou` automatycznie — brak duplikowania pola branży na `People`.
 - **12 kanonicznych opcji `soundyou_industry`:**
   1. `SPA & Wellness`
   2. `Kobido & Masaż`
@@ -32,13 +33,46 @@
   - `Branża — Fitness / Joga / Pilates`
   - `Branża — Fryzjer / Barber`
   - `Branża — Gabinety / Sklepy / Inne`
-- **Widoki ogólne:** `All Companies`, `Firmy SoundYou - data dodania`, oraz 6 widoków kampanijnych Resend (`resend_last_sent_at`, `resend_last_campaign`, `resend_last_delivery_status`, `resend_any_opened`, `resend_any_clicked`, `resend_sends_count`).
+- **Widoki ogólne i Resend:** `All Companies`, `Firmy SoundYou - data dodania`, oraz 6 widoków kampanijnych Resend opartych o zsynchronizowane pola podsumowujące (`resend_last_sent_at`, `resend_last_campaign`, `resend_last_delivery_status`, `resend_any_opened`, `resend_any_clicked`, `resend_sends_count`).
 
 ---
 
-## 2. Klucz mapowania EN ↔ PL (`INDUSTRY_EN_PL_MAP`)
+## 2. Docelowy workflow (`Scraper → CSV → Attio`)
 
-Zarówno `attio_sync.py`, jak i `scraper.py` obsługują zapytania i etykiety po angielsku i po polsku, mapując je 1:1 do 12 opcji w Attio (oraz wzbogacając multiselect na podstawie nazwy firmy i domeny):
+1. **Etap 1 — Scraping do pliku `.csv` (`scraper.py`):**
+   - Scraper zbiera leady z wybranych źródeł, pobiera adresy e-mail, linki **Facebook** / **Instagram** (ze stron WWW `<a href>`, JSON-LD `sameAs` i profili Booksy `__NUXT__`, z odfiltrowaniem kont katalogowych typu `booksypl`, `/sharer`, `/reel`, `/p/`), oraz tytuł strony (`og:site_name` / JSON-LD `name` / `<title>`).
+   - Automatycznie ustala nazwę firmy (`resolve_company_name`), jeśli nazwa ze scrapingu jest pusta, generyczna lub techniczna (np. `Strona główna`, `Home`, `Brak`, `R. · hash`, surowy URL/e-mail, samo słowo `SPA` / `Salon` / `Gabinet`).
+   - Klasyfikuje lead do kanonicznych branż SoundYou (`classify_soundyou_industries`) i dopisuje do `data/Raport/SoundYouLeads.csv` (z kolumnami `Facebook` i `Instagram` oraz deduplikacją w `append_to_csv_master` po znormalizowanym telefonie bez `+48`, domenie firmowej, URL social media, e-mailu i `(nazwa, miasto)`).
+2. **Etap 2 — Ścisła deduplikacja w skrypcie i uzupełnianie Attio (`attio_sync.py`):**
+   - **Deduplikacja lokalna batcha CSV:** łączy duplikaty wewnątrz CSV po telefonie (`+48XXXXXXXXX`), e-mailu, URL Facebook/Instagram, domenie firmowej, `(nazwa, miasto)` oraz `(nazwa, kod pocztowy)`.
+   - **Deduplikacja względem istniejących rekordów w Attio (6 sygnałów):**
+     1. `companies_by_domain` (domena firmowa),
+     2. `companies_by_social` (URL `facebook` / `instagram` z pól natywnych oraz z opisu),
+     3. `companies_by_email` i `people_by_email` (e-maile z `People` i opisów `Companies`),
+     4. `companies_by_phone` i `people_by_phone` (telefony `+48XXXXXXXXX` z `People` i opisów `Companies`),
+     5. `companies_by_name_city` i `companies_by_name_postcode` (`XX-XXX` z `primary_location` i `line_1`),
+     6. `companies_by_unique_name` (unikalna nazwa firmy w Attio o długości ≥ 5 znaków).
+   - **Zasada „istnieje = pomiń” (`enrich_existing=False` domyślnie):** jeśli lead z wysyłanego batcha istnieje już w Attio po którymkolwiek z powyższych sygnałów, **nie jest dodawany ani modyfikowany (`skipped_existing_companies`, 0 zapisów `POST`/`PATCH`)**. Dla nowo tworzonych firm indeks w pamięci jest aktualizowany w locie, aby uniknąć duplikatów w obrębie tego samego batcha. *(Opcjonalna flaga `--enrich-existing` pozwala w razie potrzeby na wzbogacanie istniejących firm o brakujące branże/domeny.)*
+3. **Resend pozostaje osobnym, świadomym krokiem:**
+   - Skrypty `run_pipeline.bat`, `Scraper/run_scraper.bat` i `run_agglomeration.bat` wykonują wyłącznie `Scraper → CSV → Attio` (nie wysyłają automatycznie do Resend).
+   - Ręczny eksport do Resend Audiences pozostaje dostępny w osobnym `..\send_to_resend.bat`.
+
+---
+
+## 3. Automatyczne ustalanie nazwy firmy (`resolve_company_name`)
+
+Gdy nazwa ze scrapingu jest niejasna (`is_unclear_company_name`), skrypt sam wybiera najlepszą nazwę w kolejności priorytetów:
+1. **`site_title`** ze strony WWW (`og:site_name` → JSON-LD `Organization`/`LocalBusiness` `name` → pierwszy niegeneryczny człon `<title>`).
+2. **Nazwa profilu Facebook / Instagram** — rozdzielenie `CamelCase` i separatorów `._-`, usunięcie numerycznego ID stron FB (np. `facebook.com/SalonUrodyMagnolia-102938475610293` → `Salon Urody Magnolia`, `instagram.com/kobido.studio.krakow` → `Kobido Studio Krakow`).
+3. **Domena strony WWW** — usunięcie `www.` i końcówek `.pl`/`.com.pl`/`.eu` + rozklejanie słów branżowych (np. `enklawaspa.com` → `Enklawa SPA`, `safari-wellness.pl` → `Safari Wellness`).
+4. **Adres e-mail** — najpierw własna domena firmowa (`recepcja@hotelmarta.com.pl` → `Hotel Marta`), a dla darmowych skrzynek (`@gmail.com`, `@wp.pl`, `@o2.pl` itd.) część przed `@` po oczyszczeniu prefiksów typu `kontakt`/`biuro`/`recepcja` i cyfr (`yin.studiospa@gmail.com` → `Yin Studio SPA`, `ladna.ja2024@gmail.com` → `Ladna Ja`).
+5. **Fallback:** dla ogólnej nazwy kategorii z miastem — np. `Gabinet masażu (Środa Śląska)`.
+
+---
+
+## 4. Klucz mapowania EN ↔ PL (`INDUSTRY_EN_PL_MAP`)
+
+Zarówno `attio_sync.py`, jak i `scraper.py` obsługują zapytania i etykiety po angielsku i po polsku, mapując je 1:1 do 12 opcji w Attio (oraz wzbogacając multiselect na podstawie nazwy firmy, domeny i linków social media):
 
 | Opcja Attio (`soundyou_industry`) | Przykładowe klucze EN | Przykładowe klucze PL |
 |---|---|---|
@@ -55,53 +89,46 @@ Zarówno `attio_sync.py`, jak i `scraper.py` obsługują zapytania i etykiety po
 | `Sklep / Retail` | `shop`, `store`, `retail`, `boutique`, `showroom`, `concept store` | `sklep`, `butik`, `sklep / retail` |
 | `Lokal Usługowy / Inne` | `other`, `service`, `services`, `local business` | `inne`, `lokal usługowy` |
 
-Rekordy wielobranżowe (np. `hotel-spa`, `spa hotel`, `massage spa`) otrzymują wszystkie pasujące tagi multiselect, więc pojawiają się jednocześnie w każdym odpowiednim widoku Attio oraz w odpowiadających arkuszach Excela.
+---
+
+## 5. Zakres plików zmodyfikowanych
+
+### W repozytorium git (`Scraper/`)
+- **`attio_sync.py`**: klient Attio REST API v2, `ensure_soundyou_schema()`, `extract_social_links()`, `resolve_company_name()`, wzmocniona deduplikacja CSV i 6-sygnałowa deduplikacja względem Attio (domyślny tryb ścisłego pomijania istniejących leadów + opcjonalny `--enrich-existing`), zapis pól `facebook` i `instagram` na `Companies`.
+- **`scraper.py`**: pełne `CATEGORY_KEYWORDS` / `CATEGORY_PRIORITY` (dodane `fitness`, `sklep`, `pilates`, `medytacja`, `poczekalnia`, `stomatolog`, `klinika`, aliasy EN), ekstrakcja `facebook` / `instagram` / `site_title` ze stron WWW i Booksy, automatyczne `resolve_company_name`, kolumny `Facebook` i `Instagram` w `SoundYouLeads.csv` oraz wzmocniona deduplikacja w `append_to_csv_master`.
+- **`run_scraper.bat`**: zaktualizowane menu 11 branż SoundYou + wpis ręczny, przepływ `Scraper → CSV → Attio` (bez automatycznego Resend).
+- **`tests/test_attio_sync.py`**: 17 testów jednostkowych (12 opcji branż, EN ↔ PL, ścisłe pomijanie istniejących leadów w Attio po domenie/telefonie/e-mailu/social/batchu, `--enrich-existing`, `--dry-run`, ekstrakcja FB/IG, automatyczne ustalanie nazwy firmy).
+- **`.env.example`**: dokumentacja `ATTIO_API_KEY`.
+
+### Poza repozytorium git (`c:\IdeaMusicPro\Web-Crunchy-Scrap\`)
+- **`run_pipeline.bat`**: `Scraper → CSV → Attio` (istniejące leady pomijane).
+- **`run_agglomeration.bat`**: scraping wielu miast → `CSV → Attio`.
+- **`send_to_attio.bat`**: ręczna synchronizacja dowolnego pliku `.csv` do Attio (wspiera `--dry-run`).
 
 ---
 
-## 3. Wprowadzone zmiany
+## 6. Weryfikacja (stan przed pierwszą wysyłką live)
 
-### W repozytorium (`Scraper/`)
-- **`attio_sync.py`** *(nowy)*:
-  - Pełny klient Attio REST API v2 z obsługą retry/backoff (`429`, `5xx`).
-  - `ensure_soundyou_schema()` — idempotentne sprawdzanie/tworzenie `soundyou_industry` i wszystkich 12 opcji + weryfikacja 8 widoków branżowych.
-  - `load_and_dedup_csv()` — czyszczenie nazw (usunięcie emoji i śmieci), normalizacja telefonów (`+48XXXXXXXXX`), filtrowanie domen/maili katalogowych (Booksy, Fresha, social media), lokalne scalanie duplikatów (sumowanie branż, maili, telefonów, domen).
-  - `sync_leads_to_attio()` — deduplikacja względem Attio (`Companies` po domenach, `(name, city)` i e-mailach; `People` po `email_addresses`). Istniejące firmy są bezpiecznie wzbogacane o brakujące tagi `soundyou_industry` i unikalne domeny (bez nadpisywania opisów ani pól Resend). Dla każdego e-maila tworzony jest rekord `People` powiązany z firmą (`company`) lub podpinany jest istniejący niepowiązany kontakt.
-- **`scraper.py`** *(zmodyfikowany)*:
-  - Dodana kategoria `kawiarnia` w `CATEGORY_KEYWORDS` / `CATEGORY_PRIORITY`.
-  - Zaktualizowany kreator interaktywny (`known_industries` + etykiety PL/EN) i podział arkuszy Excel (`_rebuild_branza_sheets` z obsługą multiselect i nazw arkuszy bez znaku `/`).
-  - Automatyczna klasyfikacja nowych leadów przez `classify_soundyou_industries` przed zapisem do `SoundYouLeads.csv` / `.xlsx`.
-  - Nowe flagi CLI: `--sync-attio` oraz `--attio-dry-run`.
-- **`.env.example`** *(zmodyfikowany)*: dodano `ATTIO_API_KEY=your_attio_api_key_here`.
-- **`tests/test_attio_sync.py`** *(nowy)*: testy klasyfikacji 12 opcji, klucza EN ↔ PL, deduplikacji CSV, idempotentności schematu, synchronizacji `Companies` + `People` oraz trybu `--dry-run`.
-
-### Poza repozytorium git (katalog nadrzędny `c:\IdeaMusicPro\Web-Crunchy-Scrap\`)
-- **`run_pipeline.bat`** *(zmodyfikowany)*: dodany krok `[2/4] python attio_sync.py --csv %MASTER%` pomiędzy scraperem a Resend.
-- **`send_to_attio.bat`** *(nowy)*: skrót do ręcznej synchronizacji dowolnego CSV z Attio.
+- **Pytest (`tests/test_attio_sync.py`, `tests/test_pure_logic.py`, `tests/test_merge_dedup.py`):** `135 passed in 0.86s`.
+- **Offline dry-run (`python attio_sync.py --offline-dry-run` na `data/Raport/SoundYouLeads.csv`):**
+  - `339` wierszy źródłowych → `36` scalonych duplikatów w CSV, `2` odrzucone (junk) → **`301` unikalnych firm** (`189` z e-mailem).
+  - Rozkład multiselect: `SPA & Wellness: 301`, `Kobido & Masaż: 79`, `Beauty / Salon Urody: 45`, `Hotele i Pensjonaty: 28`, `Poczekalnia / Gabinet: 11`, `Fitness / Siłownia: 7`, `Joga / Pilates / Medytacja: 4`, `Salon Fryzjerski / Barber: 4`, `Sklep / Retail: 2`.
+- **Stan wysyłki do Attio:** `ATTIO_API_KEY` jest już dodany w lokalnym `Scraper/.env`, **nic nie zostało jeszcze wysłane do Attio** (na prośbę użytkownika).
 
 ---
 
-## 4. Weryfikacja
+## 7. Jak uruchomić, gdy będziesz gotowy
 
-- **Pytest (`tests/test_attio_sync.py`, `tests/test_pure_logic.py`, `tests/test_merge_dedup.py`):** `128 passed in 0.98s`.
-- **Offline dry-run na `data/Raport/SoundYouLeads.csv`:**
-  - `339` wierszy → `2` odrzucone (junk), `19` scalonych duplikatów → **`318` unikalnych firm** (`199` z e-mailem).
-  - Rozkład multiselect: `SPA & Wellness: 318`, `Kobido & Masaż: 83`, `Beauty / Salon Urody: 46`, `Hotele i Pensjonaty: 29`, `Poczekalnia / Gabinet: 12`, `Fitness / Siłownia: 9`, `Joga / Pilates / Medytacja: 4`, `Salon Fryzjerski / Barber: 4`, `Sklep / Retail: 2`.
-
----
-
-## 5. Jak uruchomić na żywo (Next Steps)
-
-1. Ustaw `ATTIO_API_KEY` w lokalnym pliku `Scraper/.env` (plik `.env` jest ignorowany przez git).
-2. Zweryfikuj podgląd bez zapisu względem bieżącej bazy Attio:
+1. Bezpieczny podgląd względem bieżącej bazy Attio (tylko odczyt, 0 zapisów):
    ```powershell
    .\.venv\Scripts\python.exe attio_sync.py --dry-run
    ```
-3. Uruchom synchronizację docelową:
+2. Właściwe uzupełnienie brakujących leadów z CSV w Attio (istniejące zostaną pominięte):
    ```powershell
    .\.venv\Scripts\python.exe attio_sync.py
    ```
-4. Przy kolejnych przebiegach scrapera użyj flagi `--sync-attio` lub uruchom `..\run_pipeline.bat` / `..\send_to_attio.bat`:
+3. Nowy scraping z automatycznym zapisem do CSV i uzupełnieniem Attio:
+   - kliknij `Scraper\run_scraper.bat`, `..\run_pipeline.bat` lub `..\run_agglomeration.bat`, albo uruchom:
    ```powershell
    .\.venv\Scripts\python.exe scraper.py --query kawiarnia --location Wroclaw --emails --use-google --sync-attio
    ```

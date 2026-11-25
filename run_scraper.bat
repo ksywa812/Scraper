@@ -43,28 +43,36 @@ REM ── TRYB 2: Aglomeracja ────────────────�
 :MODE2
 echo.
 echo ============================================================
-echo  Wybierz branze:
+echo  Wybierz branze (zgodne z Attio soundyou_industry):
 echo ============================================================
-echo  [1] SPA / Masaz / Wellness / Kobido
-echo  [2] Joga / Yoga
-echo  [3] Fizjoterapia / Rehabilitacja
-echo  [4] Uroda / Kosmetologia
-echo  [5] Fryzjer / Barber
-echo  [6] Hotel / Resort
-echo  [7] Restauracja / Kawiarnia / Bistro
-echo  [8] Wpisz recznie
+echo  [1]  SPA ^& Wellness
+echo  [2]  Kobido ^& Masaz
+echo  [3]  Beauty / Salon Urody
+echo  [4]  Hotele i Pensjonaty
+echo  [5]  Restauracje
+echo  [6]  Kawiarnie
+echo  [7]  Fitness / Silownia
+echo  [8]  Joga / Pilates / Medytacja
+echo  [9]  Salon Fryzjerski / Barber
+echo  [10] Poczekalnia / Gabinet / Fizjoterapia
+echo  [11] Sklep / Retail
+echo  [12] Wpisz recznie
 echo ============================================================
-set /p BRANZA="Wybierz branze [1-8]: "
+set /p BRANZA="Wybierz branze [1-12]: "
 
 set QUERY=
 if "!BRANZA!"=="1" set QUERY=spa
-if "!BRANZA!"=="2" set QUERY=joga
-if "!BRANZA!"=="3" set QUERY=fizjoterapia
-if "!BRANZA!"=="4" set QUERY=uroda
-if "!BRANZA!"=="5" set QUERY=fryzjer
-if "!BRANZA!"=="6" set QUERY=hotel
-if "!BRANZA!"=="7" set QUERY=restaurant
-if "!BRANZA!"=="8" set /p QUERY="Wpisz nazwe branzy: "
+if "!BRANZA!"=="2" set QUERY=masaz
+if "!BRANZA!"=="3" set QUERY=uroda
+if "!BRANZA!"=="4" set QUERY=hotel
+if "!BRANZA!"=="5" set QUERY=restaurant
+if "!BRANZA!"=="6" set QUERY=kawiarnia
+if "!BRANZA!"=="7" set QUERY=fitness
+if "!BRANZA!"=="8" set QUERY=joga
+if "!BRANZA!"=="9" set QUERY=fryzjer
+if "!BRANZA!"=="10" set QUERY=fizjoterapia
+if "!BRANZA!"=="11" set QUERY=sklep
+if "!BRANZA!"=="12" set /p QUERY="Wpisz nazwe branzy: "
 
 if "!QUERY!"=="" (
     echo [BLAD] Nieprawidlowy wybor branzy.
@@ -137,21 +145,26 @@ for %%C in (!CITIES!) do (
 echo.
 echo  Miasta zakonczone. Bledy: !FAILED!
 
-REM ── RESEND ───────────────────────────────────────────────────
+REM ── ATTIO SYNC (tylko nowe leady; istniejace w Attio sa pomijane) ──
 :RESEND
 echo.
 echo ============================================================
-echo  [2/2] Import do Resend Audiences
+echo  [2/2] Uzupelnienie nowych leadow w Attio CRM (istniejace pomijane)
 echo ============================================================
 if exist "%VENV_PY%" (
-    "%VENV_PY%" resend_sender.py --csv "%MASTER%"
+    "%VENV_PY%" attio_sync.py --csv "%MASTER%"
 ) else (
-    py resend_sender.py --csv "%MASTER%"
+    py attio_sync.py --csv "%MASTER%"
+)
+if errorlevel 1 (
+    echo [OSTRZEZENIE] Synchronizacja z Attio nie powiodla sie ^(sprawdz ATTIO_API_KEY w .env^).
 )
 
 echo.
 echo ============================================================
-echo  Gotowe! Sprawdz: https://resend.com/audiences
+echo  Gotowe! Sprawdz:
+echo    - %MASTER%
+echo    - https://app.attio.com
 echo ============================================================
 echo.
 pause

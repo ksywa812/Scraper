@@ -357,11 +357,87 @@ _SIGNAL_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 EMAIL_RE = re.compile(r"[\w.!#$%&'*+/=?^`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+", re.I | re.ASCII)
 
 PLATFORM_DOMAINS = frozenset({
-    "booksy.com", "fresha.com", "facebook.com", "instagram.com", "tiktok.com",
+    "booksy.com", "fresha.com", "facebook.com", "fb.com", "instagram.com", "tiktok.com",
     "google.com", "maps.app.goo.gl", "linktr.ee", "wixsite.com", "wordpress.com",
     "business.site", "goo.gl", "youtube.com", "linkedin.com", "znanylekarz.pl",
     "panoramafirm.pl", "pkt.pl", "fixly.pl", "oferteo.pl", "firmy.net",
 })
+
+FREE_EMAIL_DOMAINS = frozenset({
+    "gmail.com", "googlemail.com", "wp.pl", "o2.pl", "onet.pl", "op.pl",
+    "poczta.onet.pl", "onet.eu", "vp.pl", "interia.pl", "interia.eu",
+    "poczta.fm", "tlen.pl", "gazeta.pl", "yahoo.com", "yahoo.pl",
+    "hotmail.com", "outlook.com", "live.com", "msn.com", "icloud.com",
+    "me.com", "proton.me", "protonmail.com", "aol.com", "gmx.com",
+    "home.pl", "nazwa.pl", "lh.pl", "cyberfolks.pl", "ovh.pl",
+})
+
+GENERIC_EMAIL_PREFIXES = frozenset({
+    "kontakt", "biuro", "recepcja", "info", "rezerwacja", "rezerwacje",
+    "booking", "office", "hello", "hej", "halo", "mail", "poczta",
+    "administracja", "sekretariat", "bok", "obsługa", "obsluga", "sklep",
+    "zamowienia", "zamówienia", "marketing", "manager", "kontaktowy",
+})
+
+UNCLEAR_EXACT_NAMES = frozenset({
+    "", "brak", "brak nazwy", "bez nazwy", "unknown", "unnamed", "untitled",
+    "none", "null", "n a", "na", "test",
+    "strona glowna", "strona główna", "home", "homepage", "home page",
+    "index", "welcome", "witamy", "start", "oferta", "kontakt", "cennik",
+    "o nas", "rezerwacja", "rezerwacje", "kalendarz", "uslugi", "usługi",
+    "moja strona", "twoja strona", "nowa strona", "wordpress", "wixsite",
+    "mysite", "website", "strona internetowa", "wizytowka", "wizytówka",
+    "403 forbidden", "404 not found", "attention required", "just a moment",
+    # Samotne nazwy kategorii bez marki własnej
+    "spa", "day spa", "wellness", "spa wellness", "masaz", "masaż",
+    "gabinet masazu", "gabinet masażu", "salon masazu", "salon masażu",
+    "kobido", "uroda", "beauty", "salon urody", "salon kosmetyczny",
+    "gabinet kosmetyczny", "kosmetyczka", "kosmetologia",
+    "fryzjer", "salon fryzjerski", "barber", "barbershop",
+    "hotel", "pensjonat", "restauracja", "kawiarnia", "bistro",
+    "fitness", "silownia", "siłownia", "joga", "yoga", "pilates",
+    "fizjoterapia", "rehabilitacja", "gabinet", "klinika", "przychodnia",
+    "poczekalnia", "sklep", "lokal uslugowy", "lokal usługowy",
+})
+
+DIRECTORY_SOCIAL_HANDLES = frozenset({
+    "booksy", "booksypl", "booksybiz", "booksy.polska", "booksy_polska",
+    "fresha", "freshacom", "panoramafirm", "pktpl", "znanylekarz",
+    "fixlypl", "oferteo", "firmynet", "aleopl", "wix", "wordpress",
+    "elementor", "shoper", "idosell", "woocommerce", "prestashop",
+    "squarespace", "webflow", "canva", "meta", "instagram", "facebook",
+})
+
+IG_SKIP_SEGMENTS = frozenset({
+    "p", "reel", "reels", "stories", "explore", "accounts", "direct",
+    "tv", "tags", "about", "legal", "developer", "directory", "ar",
+})
+
+FB_SKIP_SEGMENTS = frozenset({
+    "sharer", "sharer.php", "share", "share.php", "dialog", "plugins",
+    "events", "groups", "watch", "photo", "photo.php", "photos", "videos",
+    "login", "login.php", "policies", "privacy", "help", "tr", "ads",
+    "marketplace", "gaming", "reel", "reels", "stories", "hashtag",
+    "permalink.php", "story.php", "l.php",
+})
+
+# Słowa branżowe do inteligentnego rozklejania sklejonych nazw z domen/uchwytów (np. "enklawaspa" -> "Enklawa Spa")
+_BRAND_SPLIT_TOKENS = (
+    "wellness", "massage", "masaze", "masaż", "masaz", "kobido", "beauty",
+    "estetica", "estetyka", "kosmetyka", "kosmetologia", "medispa", "dayspa",
+    "studiospa", "thaispa", "balispa", "orientspa", "floatspa", "greenspa",
+    "hotel", "resort", "palac", "zamek", "dwor", "villa", "willa", "pensjonat",
+    "restauracja", "restaurant", "bistro", "kawiarnia", "coffee", "cafe",
+    "fitness", "silownia", "crossfit", "pilates", "yoga", "joga",
+    "barbershop", "barber", "fryzjer", "hair", "klinika", "clinic",
+    "fizjo", "rehab", "studio", "salon", "instytut", "centrum", "strefa",
+    "ogrod", "kraina", "kopalnia", "fabryka", "akademia", "dom", "przystan",
+    "zakatek", "oaza", "harmonia", "relaksu", "relaks", "relax", "odnowa",
+    "urody", "uroda", "ciala", "twarzy", "zdrowia", "termy", "sauna", "spa",
+    "wroclaw", "krakow", "warszawa", "poznan", "gdansk", "gdynia", "sopot",
+    "katowice", "lodz", "szczecin", "lublin", "bialystok", "rzeszow", "opole",
+    "slask", "polska",
+)
 
 PLATFORM_EMAILS = frozenset({
     "aneksy@booksy.com", "pomoc.pl@booksy.com", "sprzedaz@booksy.com",
@@ -429,6 +505,299 @@ def normalize_phone_e164(raw: str) -> str:
     return ""
 
 
+PHONE_EXTRACT_RE = re.compile(r"(?:\+?48[\s.\-]?)?(?:\d[\s.\-]?){8}\d")
+POSTCODE_RE = re.compile(r"\b\d{2}-\d{3}\b")
+
+
+def extract_phones_e164(text: str) -> set[str]:
+    """Wyciąga wszystkie polskie numery telefonów (+48XXXXXXXXX) z tekstu/opisu."""
+    found: set[str] = set()
+    for m in PHONE_EXTRACT_RE.findall(text or ""):
+        norm = normalize_phone_e164(m)
+        if norm:
+            found.add(norm)
+    return found
+
+
+def extract_postcode(text: str) -> str:
+    m = POSTCODE_RE.search(text or "")
+    return m.group(0) if m else ""
+
+
+SOCIAL_URL_RE = re.compile(
+    r"https?://(?:www\.|m\.|pl-pl\.)?(?:instagram\.com|facebook\.com|fb\.com)/[^\s\"'<>)\]]+",
+    re.IGNORECASE,
+)
+
+
+def normalize_instagram_url(raw: str) -> str:
+    """Zwraca kanoniczny URL profilu Instagram (`https://www.instagram.com/<handle>`) lub pusty string."""
+    raw = (raw or "").strip()
+    if not raw:
+        return ""
+    if "instagram.com" not in raw.lower():
+        return ""
+    try:
+        u = urlsplit(raw if "://" in raw else f"https://{raw}")
+    except ValueError:
+        return ""
+    host = (u.hostname or "").lower().removeprefix("www.").removeprefix("m.")
+    if host != "instagram.com":
+        return ""
+    parts = [p for p in (u.path or "").split("/") if p]
+    if not parts:
+        return ""
+    handle = parts[0].lstrip("@").strip()
+    low = handle.lower()
+    if low in IG_SKIP_SEGMENTS or low in DIRECTORY_SOCIAL_HANDLES:
+        return ""
+    if not re.fullmatch(r"[A-Za-z0-9._]{2,40}", handle):
+        return ""
+    return f"https://www.instagram.com/{handle}"
+
+
+def normalize_facebook_url(raw: str) -> str:
+    """Zwraca kanoniczny URL strony/profilu Facebook lub pusty string."""
+    raw = (raw or "").strip()
+    if not raw:
+        return ""
+    if not any(d in raw.lower() for d in ("facebook.com", "fb.com")):
+        return ""
+    try:
+        u = urlsplit(raw if "://" in raw else f"https://{raw}")
+    except ValueError:
+        return ""
+    host = (u.hostname or "").lower()
+    for prefix in ("www.", "m.", "web.", "pl-pl.", "touch."):
+        if host.startswith(prefix):
+            host = host[len(prefix):]
+    if host not in ("facebook.com", "fb.com"):
+        return ""
+    parts = [p for p in (u.path or "").split("/") if p]
+    if not parts:
+        return ""
+    first_low = parts[0].lower()
+    if first_low in FB_SKIP_SEGMENTS or first_low in DIRECTORY_SOCIAL_HANDLES:
+        return ""
+    if first_low == "profile.php":
+        m_id = re.search(r"(?:^|&)id=(\d{5,})", u.query or "")
+        return f"https://www.facebook.com/profile.php?id={m_id.group(1)}" if m_id else ""
+    if first_low in ("people", "pages", "p") and len(parts) >= 2:
+        slug_part = "/".join(parts[:3]) if len(parts) >= 3 and parts[2].isdigit() else "/".join(parts[:2])
+        if parts[1].lower() in DIRECTORY_SOCIAL_HANDLES:
+            return ""
+        return f"https://www.facebook.com/{slug_part}"
+    slug = parts[0].strip()
+    if len(slug) < 2 or slug.lower() in DIRECTORY_SOCIAL_HANDLES:
+        return ""
+    if not re.fullmatch(r"[A-Za-z0-9._\-]{2,80}", slug):
+        return ""
+    return f"https://www.facebook.com/{slug}"
+
+
+def extract_social_links(*texts: str) -> dict[str, str]:
+    """Wyciąga pierwsze poprawne linki `facebook` i `instagram` z przekazanych URL-i lub tekstu HTML."""
+    fb = ""
+    ig = ""
+    for text in texts:
+        if not text:
+            continue
+        candidates = [text.strip()] + SOCIAL_URL_RE.findall(text)
+        for cand in candidates:
+            if not ig:
+                ig = normalize_instagram_url(cand)
+            if not fb:
+                fb = normalize_facebook_url(cand)
+            if fb and ig:
+                return {"facebook": fb, "instagram": ig}
+    return {"facebook": fb, "instagram": ig}
+
+
+def _humanize_slug(slug: str) -> str:
+    """Zamienia identyfikator z domeny, uchwytu IG/FB lub local-part e-maila na czytelną nazwę własną."""
+    s = (slug or "").strip().lstrip("@")
+    if not s:
+        return ""
+    # Usuń końcowe numeryczne ID stron z Facebooka (np. "salon-urody-102938475610293")
+    s = re.sub(r"[-_]\d{6,}$", "", s)
+    # Rozdziel CamelCase (np. "SalonUrodyMagnolia" -> "Salon Urody Magnolia")
+    s = re.sub(r"([a-z0-9ąćęłńóśźż])([A-ZĄĆĘŁŃÓŚŹŻ])", r"\1 \2", s)
+    # Zamień kropki, myśliwki, podkreślenia i plusy na spacje
+    s = re.sub(r"[._\-+/]+", " ", s)
+    # Usuń wiszące 1-4 cyfrowe sufiksy na końcu tokenu (np. "ladna ja2024" -> "ladna ja", "spa4" -> "spa")
+    tokens: list[str] = []
+    for raw_tok in s.split():
+        tok = re.sub(r"(?<=[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż])\d{1,4}$", "", raw_tok)
+        if tok.isdigit() and len(tok) >= 4:
+            continue
+        # Rozklej długie sklejone słowa wokół znanych rdzeni branżowych (np. "enklawaspa" -> "enklawa spa")
+        low_tok = tok.lower()
+        if len(low_tok) >= 7 and low_tok.isalpha():
+            for kw in _BRAND_SPLIT_TOKENS:
+                if low_tok != kw and len(kw) >= 3:
+                    if low_tok.endswith(kw) and len(low_tok) - len(kw) >= 3:
+                        prefix = tok[: len(tok) - len(kw)]
+                        suffix = tok[len(tok) - len(kw) :]
+                        tok = f"{prefix} {suffix}"
+                        break
+                    if low_tok.startswith(kw) and len(low_tok) - len(kw) >= 3:
+                        prefix = tok[: len(kw)]
+                        suffix = tok[len(kw) :]
+                        tok = f"{prefix} {suffix}"
+                        break
+        tokens.extend(tok.split())
+
+    cleaned: list[str] = []
+    UPPER_WORDS = {"spa", "vip", "med", "fit", "pro", "art", "bio", "eco"}
+    LOWER_CONNECTORS = {"i", "w", "z", "na", "nad", "pod", "przy", "and", "of", "by", "the"}
+    for idx, t in enumerate(tokens):
+        tl = t.lower()
+        if not any(c.isalpha() for c in t):
+            continue
+        if tl in UPPER_WORDS:
+            cleaned.append(tl.upper())
+        elif idx > 0 and tl in LOWER_CONNECTORS:
+            cleaned.append(tl)
+        else:
+            cleaned.append(t[0].upper() + t[1:].lower() if t.islower() or t.isupper() else t)
+
+    result = " ".join(cleaned).strip()
+    if len(result) < 3 or normalized(result) in UNCLEAR_EXACT_NAMES:
+        return ""
+    return result
+
+
+def _name_from_social_url(social_url: str) -> str:
+    if not social_url:
+        return ""
+    try:
+        u = urlsplit(social_url if "://" in social_url else f"https://{social_url}")
+    except ValueError:
+        return ""
+    parts = [p for p in (u.path or "").split("/") if p]
+    if not parts or parts[0].lower() == "profile.php":
+        return ""
+    if parts[0].lower() in ("people", "pages", "p") and len(parts) >= 2:
+        candidate = parts[1]
+    else:
+        candidate = parts[0]
+    from urllib.parse import unquote
+    return _humanize_slug(unquote(candidate))
+
+
+def _name_from_domain(domain_or_url: str) -> str:
+    dom = business_domain(domain_or_url)
+    if not dom:
+        return ""
+    # Usuń popularne polskie i globalne końcówki TLD/regionalne
+    stem = re.sub(
+        r"\.(?:com\.pl|net\.pl|org\.pl|info\.pl|biz\.pl|waw\.pl|wroclaw\.pl|krakow\.pl|"
+        r"poznan\.pl|gda\.pl|gdansk\.pl|slask\.pl|katowice\.pl|lodz\.pl|szczecin\.pl|"
+        r"lublin\.pl|rzeszow\.pl|opole\.pl|zakopane\.pl|karpacz\.pl|kolobrzeg\.pl|"
+        r"pl|com|eu|net|org|info|biz|online|site|website|co)$",
+        "",
+        dom,
+        flags=re.IGNORECASE,
+    )
+    # Jeśli TLD samo w sobie niesie branżę (np. harmonia.spa, lotus.studio), zachowaj je!
+    return _humanize_slug(stem)
+
+
+def _name_from_emails(emails: Iterable[str]) -> str:
+    email_list = sorted({(e or "").strip().lower() for e in emails if e and "@" in e})
+    # 1. Najpierw szukaj własnej domeny firmowej w adresie e-mail (np. recepcja@hotelmarta.com.pl -> Hotel Marta)
+    for em in email_list:
+        _, dom = em.rsplit("@", 1)
+        if dom not in FREE_EMAIL_DOMAINS and dom not in PLATFORM_DOMAINS:
+            from_dom = _name_from_domain(dom)
+            if from_dom:
+                return from_dom
+    # 2. Dla darmowych skrzynek (@gmail.com, @wp.pl itd.) wyciągnij nazwę z części przed '@'
+    for em in email_list:
+        local, _ = em.rsplit("@", 1)
+        parts = [
+            p for p in re.split(r"[._\-+]+", local)
+            if p and p.lower() not in GENERIC_EMAIL_PREFIXES and not p.isdigit()
+        ]
+        if not parts:
+            continue
+        candidate = _humanize_slug(" ".join(parts))
+        if candidate and normalized(candidate) not in GENERIC_EMAIL_PREFIXES:
+            return candidate
+    return ""
+
+
+def is_unclear_company_name(name: str) -> bool:
+    """Zwraca True, gdy nazwa firmy ze scrapera jest pusta, generyczna, techniczna lub nieczytelna."""
+    clean = strip_emoji(name or "").strip()
+    if len(clean) < 3 or not any(c.isalpha() for c in clean):
+        return True
+    low = clean.lower()
+    if low.startswith(("http://", "https://", "www.")) or "@" in low:
+        return True
+    # Tymczasowe inicjały typu "R.", "L. · 7958970a"
+    if re.fullmatch(r"[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż]{1,2}\.?(?:\s*[·\-]\s*[0-9a-f]{6,})?", clean):
+        return True
+    norm = normalized(clean)
+    if norm in UNCLEAR_EXACT_NAMES:
+        return True
+    return False
+
+
+def resolve_company_name(
+    raw_name: str = "",
+    *,
+    site_title: str = "",
+    website: str = "",
+    facebook: str = "",
+    instagram: str = "",
+    emails: Iterable[str] = (),
+    city: str = "",
+) -> str:
+    """Automatycznie ustala najlepszą nazwę firmy z dostępnych danych leada.
+
+    Jeśli `raw_name` jest podana jasno, zwraca oczyszczoną `raw_name`.
+    Gdy `raw_name` jest pusta lub niejasna (np. 'Strona główna', 'Salon', URL, brak),
+    kolejno próbuje wyznaczyć nazwę z:
+      1) tytułu strony WWW (`og:site_name` / `<title>`),
+      2) linku Facebook / Instagram (nazwa profilu / handle),
+      3) domeny strony WWW,
+      4) adresu e-mail (domena własna lub część przed `@` dla gmail/wp/o2).
+    """
+    clean_raw = strip_emoji(raw_name or "").strip()
+    if not is_unclear_company_name(clean_raw):
+        return clean_raw
+
+    # 1. Tytuł witryny WWW (np. og:site_name lub oczyszczony <title>)
+    clean_title = strip_emoji(site_title or "").strip()
+    if clean_title and not is_unclear_company_name(clean_title) and len(clean_title) <= 80:
+        return clean_title
+
+    # 2. Social media (Facebook często ma pełniejszy slug nazwy niż IG; sprawdzamy oba)
+    socials = extract_social_links(facebook, instagram, website)
+    for social_key in ("facebook", "instagram"):
+        inferred = _name_from_social_url(socials.get(social_key, ""))
+        if inferred and not is_unclear_company_name(inferred):
+            return inferred
+
+    # 3. Domena strony WWW
+    from_web = _name_from_domain(website)
+    if from_web and not is_unclear_company_name(from_web):
+        return from_web
+
+    # 4. Adres e-mail (domena firmowa lub local-part na darmowej poczcie)
+    from_email = _name_from_emails(emails)
+    if from_email and not is_unclear_company_name(from_email):
+        return from_email
+
+    # 5. Fallback: jeśli była ogólna kategoria (np. "Gabinet masażu") + miasto, dopisz miasto dla rozróżnienia
+    if clean_raw and len(clean_raw) >= 3 and any(c.isalpha() for c in clean_raw):
+        if city and city.lower() not in clean_raw.lower():
+            return f"{clean_raw} ({city.strip()})"
+        return clean_raw
+    return ""
+
+
 def classify_soundyou_industries(
     raw_industry: str = "",
     name: str = "",
@@ -486,6 +855,8 @@ class Lead:
     emails: set[str] = field(default_factory=set)
     phones: set[str] = field(default_factory=set)
     domains: set[str] = field(default_factory=set)
+    facebook: str = ""
+    instagram: str = ""
 
     @property
     def identity(self) -> tuple[str, str]:
@@ -503,6 +874,10 @@ class Lead:
             facts.append(f"Telefony: {', '.join(sorted(self.phones))}")
         if self.emails:
             facts.append(f"E-maile: {', '.join(sorted(self.emails))}")
+        if self.facebook:
+            facts.append(f"Facebook: {self.facebook}")
+        if self.instagram:
+            facts.append(f"Instagram: {self.instagram}")
 
         postcode_m = re.search(r"\b\d{2}-\d{3}\b", self.address)
         location = {
@@ -523,6 +898,10 @@ class Lead:
             "primary_location": location,
             INDUSTRY_ATTR_SLUG: industries,
         }
+        if self.facebook:
+            values["facebook"] = self.facebook
+        if self.instagram:
+            values["instagram"] = self.instagram
         doms = safe_domains if safe_domains is not None else sorted(self.domains)
         if doms:
             values["domains"] = doms
@@ -543,20 +922,40 @@ def read_csv_leads(csv_path: Path, stats: Counter[str]) -> Iterable[Lead]:
                 row = row + [""] * (len(headers) - len(row))
             data = {k.strip(): v.strip() for k, v in zip(headers, row) if v and v.strip()}
             raw_name = data.get("Name") or data.get("Nazwa Salonu", "")
-            name = strip_emoji(raw_name)
             city = data.get("Miasto", "")
-            if len(name) < 3 or not any(c.isalpha() for c in name):
-                stats["invalid_rows"] += 1
-                continue
             phone = normalize_phone_e164(data.get("Phone") or data.get("Numer Telefonu", ""))
             website = data.get("Website", "")
+            socials = extract_social_links(
+                data.get("Facebook", ""),
+                data.get("Instagram", ""),
+                data.get("Social Media", ""),
+                website,
+            )
+            fb = socials["facebook"]
+            ig = socials["instagram"]
             domain = business_domain(website)
             emails: set[str] = set()
             for idx in email_cols:
                 if idx < len(row):
                     emails.update(extract_emails(row[idx]))
+
+            name = resolve_company_name(
+                raw_name,
+                website=website,
+                facebook=fb,
+                instagram=ig,
+                emails=emails,
+                city=city,
+            )
+            if len(name) < 3 or not any(c.isalpha() for c in name):
+                stats["invalid_rows"] += 1
+                continue
+            if strip_emoji(raw_name).strip() != name:
+                stats["inferred_company_names"] += 1
+
             raw_industry = data.get("Branża", "")
-            industries = set(classify_soundyou_industries(raw_industry, name=name, website=website))
+            signal_urls = " ".join(x for x in (website, fb, ig) if x)
+            industries = set(classify_soundyou_industries(raw_industry, name=name, website=signal_urls))
             yield Lead(
                 name=name,
                 city=city,
@@ -566,6 +965,8 @@ def read_csv_leads(csv_path: Path, stats: Counter[str]) -> Iterable[Lead]:
                 emails=emails,
                 phones={phone} if phone else set(),
                 domains={domain} if domain else set(),
+                facebook=fb,
+                instagram=ig,
             )
 
 
@@ -577,15 +978,24 @@ def load_and_dedup_csv(csv_paths: list[Path]) -> tuple[list[Lead], Counter[str],
     for csv_path in csv_paths:
         for lead in read_csv_leads(csv_path, stats):
             name_norm, city_norm = lead.identity
+            lead_pc = extract_postcode(lead.address)
             candidates = [
                 item for item in leads
-                if (item.identity[1] == city_norm or not city_norm or not item.identity[1]) and (
+                if bool(item.phones & lead.phones)
+                or bool(item.emails & lead.emails)
+                or (lead.facebook and item.facebook == lead.facebook)
+                or (lead.instagram and item.instagram == lead.instagram)
+                or (
+                    bool(item.domains & lead.domains)
+                    and (item.identity[0] == name_norm or item.identity[1] == city_norm or not city_norm or not item.identity[1])
+                )
+                or (
                     item.identity[0] == name_norm
-                    or bool(item.phones & lead.phones)
-                    or bool(
-                        item.emails & lead.emails
-                        and lead.address
-                        and normalized(item.address) == normalized(lead.address)
+                    and (
+                        item.identity[1] == city_norm
+                        or not city_norm
+                        or not item.identity[1]
+                        or (lead_pc and lead_pc == extract_postcode(item.address))
                     )
                 )
             ]
@@ -600,6 +1010,8 @@ def load_and_dedup_csv(csv_paths: list[Path]) -> tuple[list[Lead], Counter[str],
                 existing.emails.update(lead.emails)
                 existing.phones.update(lead.phones)
                 existing.domains.update(lead.domains)
+                existing.facebook = existing.facebook or lead.facebook
+                existing.instagram = existing.instagram or lead.instagram
                 existing.address = existing.address or lead.address
                 existing.region = existing.region or lead.region
                 existing.city = existing.city or lead.city
@@ -777,9 +1189,14 @@ def build_attio_indexes(client: AttioClient) -> dict[str, Any]:
     """Buduje indeksy deduplikacji z aktualnego stanu `companies` i `people` w Attio."""
     companies_by_domain: dict[str, str] = {}
     companies_by_name_city: dict[tuple[str, str], str] = {}
+    companies_by_name_postcode: dict[tuple[str, str], str] = {}
     companies_by_email: dict[str, str] = {}
+    companies_by_phone: dict[str, str] = {}
+    companies_by_social: dict[str, str] = {}
+    name_to_cids: dict[str, set[str]] = defaultdict(set)
     company_state: dict[str, dict[str, Any]] = {}
     people_by_email: dict[str, dict[str, Any]] = {}
+    people_by_phone: dict[str, dict[str, Any]] = {}
 
     for rec in client.query_all_records("companies"):
         rid = rec["id"]["record_id"]
@@ -793,20 +1210,47 @@ def build_attio_indexes(client: AttioClient) -> dict[str, Any]:
         for d in doms:
             companies_by_domain[d] = rid
 
+        locs = vals.get("primary_location", [])
         cities = {
             normalized(item.get("locality") or "")
-            for item in vals.get("primary_location", [])
+            for item in locs
         } or {""}
+        postcodes = {
+            (item.get("postcode") or extract_postcode(item.get("line_1") or "")).strip()
+            for item in locs
+        } - {""}
+
         for item in vals.get("name", []):
             norm_name = normalized(item.get("value") or "")
             if not norm_name:
                 continue
+            name_to_cids[norm_name].add(rid)
             for c in cities:
                 companies_by_name_city[(norm_name, c)] = rid
+            for pc in postcodes:
+                companies_by_name_postcode[(norm_name, pc)] = rid
 
         for item in vals.get("description", []):
-            for em in extract_emails(item.get("value") or ""):
+            desc_text = item.get("value") or ""
+            for em in extract_emails(desc_text):
                 companies_by_email.setdefault(em, rid)
+            for ph in extract_phones_e164(desc_text):
+                companies_by_phone.setdefault(ph, rid)
+            desc_socials = extract_social_links(desc_text)
+            for s_url in desc_socials.values():
+                if s_url:
+                    companies_by_social.setdefault(s_url.lower(), rid)
+
+        for fb_item in vals.get("facebook", []):
+            fb_val = (fb_item.get("value") or "").strip()
+            fb_norm = normalize_facebook_url(fb_val) or (f"https://www.facebook.com/{fb_val.lstrip('@/')}" if fb_val and " " not in fb_val else "")
+            if fb_norm:
+                companies_by_social.setdefault(fb_norm.lower(), rid)
+        for ig_item in vals.get("instagram", []):
+            ig_val = (ig_item.get("value") or "").strip()
+            ig_norm = normalize_instagram_url(ig_val) or (f"https://www.instagram.com/{ig_val.lstrip('@/')}" if ig_val and " " not in ig_val else "")
+            if ig_norm:
+                companies_by_social.setdefault(ig_norm.lower(), rid)
 
         company_state[rid] = {
             "industries": _extract_multiselect_titles(vals.get(INDUSTRY_ATTR_SLUG, [])),
@@ -830,12 +1274,35 @@ def build_attio_indexes(client: AttioClient) -> dict[str, Any]:
             if linked_cid:
                 companies_by_email.setdefault(em, linked_cid)
 
+        for item in vals.get("phone_numbers", []):
+            raw_ph = item.get("phone_number") or item.get("original_phone_number") or ""
+            ph = normalize_phone_e164(raw_ph)
+            if not ph:
+                continue
+            people_by_phone[ph] = {
+                "record_id": pid,
+                "company_id": linked_cid,
+            }
+            if linked_cid:
+                companies_by_phone.setdefault(ph, linked_cid)
+
+    companies_by_unique_name = {
+        nm: next(iter(cids))
+        for nm, cids in name_to_cids.items()
+        if len(nm) >= 5 and len(cids) == 1
+    }
+
     return {
         "companies_by_domain": companies_by_domain,
         "companies_by_name_city": companies_by_name_city,
+        "companies_by_name_postcode": companies_by_name_postcode,
+        "companies_by_unique_name": companies_by_unique_name,
         "companies_by_email": companies_by_email,
+        "companies_by_phone": companies_by_phone,
+        "companies_by_social": companies_by_social,
         "company_state": company_state,
         "people_by_email": people_by_email,
+        "people_by_phone": people_by_phone,
     }
 
 
@@ -845,6 +1312,27 @@ def _find_matching_company(lead: Lead, indexes: dict[str, Any]) -> str | None:
         if d in by_dom:
             return by_dom[d]
 
+    by_soc = indexes["companies_by_social"]
+    for soc in (lead.facebook, lead.instagram):
+        if soc and soc.lower() in by_soc:
+            return by_soc[soc.lower()]
+
+    by_em = indexes["companies_by_email"]
+    people_em = indexes["people_by_email"]
+    for em in sorted(lead.emails):
+        if em in by_em:
+            return by_em[em]
+        if em in people_em:
+            return people_em[em].get("company_id") or f"person:{people_em[em]['record_id']}"
+
+    by_ph = indexes["companies_by_phone"]
+    people_ph = indexes["people_by_phone"]
+    for ph in sorted(lead.phones):
+        if ph in by_ph:
+            return by_ph[ph]
+        if ph in people_ph:
+            return people_ph[ph].get("company_id") or f"person:{people_ph[ph]['record_id']}"
+
     name_norm, city_norm = lead.identity
     by_nc = indexes["companies_by_name_city"]
     if (name_norm, city_norm) in by_nc:
@@ -852,10 +1340,14 @@ def _find_matching_company(lead: Lead, indexes: dict[str, Any]) -> str | None:
     if (name_norm, "") in by_nc:
         return by_nc[(name_norm, "")]
 
-    by_em = indexes["companies_by_email"]
-    for em in sorted(lead.emails):
-        if em in by_em:
-            return by_em[em]
+    pc = extract_postcode(lead.address)
+    by_npc = indexes["companies_by_name_postcode"]
+    if pc and (name_norm, pc) in by_npc:
+        return by_npc[(name_norm, pc)]
+
+    by_un = indexes["companies_by_unique_name"]
+    if name_norm in by_un:
+        return by_un[name_norm]
 
     return None
 
@@ -868,8 +1360,14 @@ def sync_leads_to_attio(
     *,
     dry_run: bool = False,
     sync_people: bool = True,
+    enrich_existing: bool = False,
 ) -> dict[str, Any]:
-    """Synchronizuje zdeduplikowane leady do `Companies` i `People` w Attio."""
+    """Synchronizuje zdeduplikowane leady do `Companies` i `People` w Attio.
+
+    Domyślnie (`enrich_existing=False`) działa w trybie ścisłej deduplikacji:
+    jeśli lead już istnieje w Attio (po domenie, e-mailu, telefonie, nazwie+mieście,
+    nazwie+kodzie pocztowym lub unikalnej nazwie), NIE jest dodawany ani nadpisywany.
+    """
     indexes = build_attio_indexes(client)
     industry_counts: Counter[str] = Counter()
 
@@ -884,7 +1382,13 @@ def sync_leads_to_attio(
         matched_cid = _find_matching_company(lead, indexes)
 
         if matched_cid:
-            # Firma już istnieje — bezpiecznie dopisz brakujące branże / unikalne domeny
+            if not enrich_existing or matched_cid.startswith("person:"):
+                stats["skipped_existing_companies"] += 1
+                if sync_people and lead.emails:
+                    stats["skipped_existing_people"] += len(lead.emails)
+                continue
+
+            # Tryb opcjonalny (--enrich-existing): dopisz brakujące branże / unikalne domeny
             state = indexes["company_state"].setdefault(
                 matched_cid, {"industries": set(), "domains": set()}
             )
@@ -924,7 +1428,7 @@ def sync_leads_to_attio(
             company_id = matched_cid
         else:
             # Nowa firma — wymagaj co najmniej 1 sygnału kontaktowego/tożsamościowego
-            if not (lead.emails or lead.phones or safe_domains):
+            if not (lead.emails or lead.phones or safe_domains or lead.facebook or lead.instagram):
                 stats["skipped_weak_identity"] += 1
                 continue
 
@@ -944,12 +1448,23 @@ def sync_leads_to_attio(
                     continue
                 company_id = created["id"]["record_id"]
 
-            # Zaktualizuj indeksy w pamięci, by uniknąć duplikatów w ramach tego samego przebiegu
-            indexes["companies_by_name_city"][lead.identity] = company_id
+            # Zaktualizuj wszystkie indeksy w pamięci, by uniknąć duplikatów w tym samym batchu
+            name_norm, city_norm = lead.identity
+            indexes["companies_by_name_city"][(name_norm, city_norm)] = company_id
+            pc = extract_postcode(lead.address)
+            if pc:
+                indexes["companies_by_name_postcode"][(name_norm, pc)] = company_id
+            if len(name_norm) >= 5:
+                indexes["companies_by_unique_name"].setdefault(name_norm, company_id)
             for d in safe_domains:
                 indexes["companies_by_domain"][d] = company_id
             for em in lead.emails:
                 indexes["companies_by_email"].setdefault(em, company_id)
+            for ph in lead.phones:
+                indexes["companies_by_phone"].setdefault(ph, company_id)
+            for soc in (lead.facebook, lead.instagram):
+                if soc:
+                    indexes["companies_by_social"].setdefault(soc.lower(), company_id)
             indexes["company_state"][company_id] = {
                 "industries": set(lead.ordered_industries),
                 "domains": set(safe_domains),
@@ -964,7 +1479,7 @@ def sync_leads_to_attio(
         for email in sorted(lead.emails):
             existing_person = indexes["people_by_email"].get(email)
             if existing_person:
-                if not existing_person.get("company_id"):
+                if enrich_existing and not existing_person.get("company_id"):
                     if not dry_run:
                         try:
                             client.request(
@@ -1055,6 +1570,7 @@ def sync_csv_to_attio(
     offline_dry_run: bool = False,
     ensure_schema: bool = True,
     sync_people: bool = True,
+    enrich_existing: bool = False,
 ) -> dict[str, Any]:
     """Główny punkt wejścia (wywoływany z CLI lub z `scraper.py --sync-attio`)."""
     path = Path(csv_path)
@@ -1091,6 +1607,7 @@ def sync_csv_to_attio(
         domain_counts,
         dry_run=dry_run,
         sync_people=sync_people,
+        enrich_existing=enrich_existing,
     )
     return {
         "mode": "dry_run" if dry_run else "apply",
@@ -1103,7 +1620,7 @@ def sync_csv_to_attio(
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     parser = argparse.ArgumentParser(
-        description="Synchronizacja leadów CSV ze scrapera wprost do Attio (Companies + People, branże SoundYou, deduplikacja)."
+        description="Synchronizacja leadów CSV ze scrapera wprost do Attio (Companies + People, branże SoundYou, ścisła deduplikacja)."
     )
     parser.add_argument(
         "--csv",
@@ -1134,7 +1651,12 @@ def main() -> int:
     parser.add_argument(
         "--companies-only",
         action="store_true",
-        help="Twórz/aktualizuj tylko `Companies`, bez rekordów `People`",
+        help="Twórz tylko nowe `Companies`, bez rekordów `People`",
+    )
+    parser.add_argument(
+        "--enrich-existing",
+        action="store_true",
+        help="Opcjonalnie dopisuj brakujące branże/domeny do firm już istniejących w Attio (domyślnie istniejące leady są całkowicie pomijane)",
     )
     parser.add_argument(
         "--token",
@@ -1161,6 +1683,7 @@ def main() -> int:
             offline_dry_run=args.offline_dry_run,
             ensure_schema=not args.no_ensure_schema,
             sync_people=not args.companies_only,
+            enrich_existing=args.enrich_existing,
         )
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0
