@@ -578,3 +578,88 @@ class TestQualityGateAndPipelineFields:
         assert out["stats"]["rejected_syntax_or_typo_emails"] == 1
         assert out["stats"]["candidate_companies"] == 1
         assert out["audit"]["inferred_names"][0]["resolved_name"] == "Kawiarnia Zloty Kubek"
+
+    def test_fill_missing_mode_fills_only_blank_fields_and_adds_new_emails_without_overwriting(self):
+        client = FakeAttioClient(
+            companies=[
+                {
+                    "id": {"record_id": "comp-phone-only"},
+                    "values": {
+                        "name": [{"value": "LadyTamaris Spa"}],
+                        "domains": [],
+                        "facebook": [{"value": "https://www.facebook.com/ExistingPageDoNotOverwrite"}],
+                        "instagram": [],
+                        "primary_location": [{"locality": "Olawa", "postcode": "55-200"}],
+                        "description": [{"value": "Źródło: Web-Crunchy-Scrap\nTelefony: +48790545002"}],
+                        mod.INDUSTRY_ATTR_SLUG: [{"option": {"title": "SPA & Wellness"}}],
+                    },
+                }
+            ],
+            people=[
+                {
+                    "id": {"record_id": "pers-existing-no-phone"},
+                    "values": {
+                        "email_addresses": [{"email_address": "stary@ladytamaris.pl"}],
+                        "phone_numbers": [],
+                        "company": [{"target_record_id": "comp-phone-only"}],
+                    },
+                }
+            ],
+        )
+
+        # Ten sam salon z kolejnego scrapingu: ma już FB i branżę w Attio (NIE wolno nadpisać!),
+        # ale wcześniej nie miał domeny WWW, Instagrama, telefonu na starym kontakcie oraz 2. e-maila.
+        leads = [
+            mod.Lead(
+                name="LadyTamaris Spa & Kobido",
+                city="Oława",
+                region="Dolnośląskie",
+                address="Słoneczna 3, 55-200 Jaczkowice",
+                industries={"SPA & Wellness", "Kobido & Masaż"},
+                emails={"stary@ladytamaris.pl", "rezerwacje@ladytamaris.pl"},
+                phones={"+48790545002"},
+                domains={"ladytamaris.pl"},
+                facebook="https://www.facebook.com/DifferentPageShouldBeIgnored",
+                instagram="https://www.instagram.com/ladytamaris_spa",
+            )
+        ]
+
+        audit = {}
+        res = mod.sync_leads_to_attio(
+            client,
+            leads,
+            Counter(),
+            Counter({"ladytamaris.pl": 1}),
+            dry_run=False,
+            sync_people=True,
+            fill_missing=True,
+            verify_emails=False,
+            audit=audit,
+        )
+        st = res["stats"]
+        assert st["filled_missing_companies"] == 1
+        assert st["filled_missing_people"] == 1
+        assert st["created_people"] == 1
+        assert st["created_people_for_existing_companies"] == 1
+
+        # PATCH na firmie zawiera WYŁĄCZNIE puste wcześniej pola: domains i instagram
+        # (facebook, soundyou_industry, primary_location i name NIE zostały nadpisane!)
+        comp_patch = [c for c in client.calls if c[0] == "PATCH" and c[1] == "/objects/companies/records/comp-phone-only"][0]
+        assert comp_patch[2]["data"]["values"] == {
+            "domains": ["ladytamaris.pl"],
+            "instagram": "https://www.instagram.com/ladytamaris_spa",
+        }
+        assert audit["filled_missing_companies"] == [
+            {
+                "record_id": "comp-phone-only",
+                "name": "LadyTamaris Spa & Kobido",
+                "filled_fields": ["domains", "instagram"],
+            }
+        ]
+
+        # Istniejący kontakt dostał brakujący telefon, a drugi e-mail został dodany jako nowy Person
+        pers_patch = [c for c in client.calls if c[0] == "PATCH" and c[1] == "/objects/people/records/pers-existing-no-phone"][0]
+        assert pers_patch[2]["data"]["values"] == {"phone_numbers": ["+48790545002"]}
+
+        pers_post = [c for c in client.calls if c[0] == "POST" and c[1] == "/objects/people/records"][0]
+        assert pers_post[2]["data"]["values"]["email_addresses"] == ["rezerwacje@ladytamaris.pl"]

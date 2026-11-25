@@ -1529,20 +1529,33 @@ def build_attio_indexes(client: AttioClient) -> dict[str, Any]:
                 if s_url:
                     companies_by_social.setdefault(s_url.lower(), rid)
 
+        fb_existing = ""
         for fb_item in vals.get("facebook", []):
             fb_val = (fb_item.get("value") or "").strip()
+            if fb_val and not fb_existing:
+                fb_existing = fb_val
             fb_norm = normalize_facebook_url(fb_val) or (f"https://www.facebook.com/{fb_val.lstrip('@/')}" if fb_val and " " not in fb_val else "")
             if fb_norm:
                 companies_by_social.setdefault(fb_norm.lower(), rid)
+        ig_existing = ""
         for ig_item in vals.get("instagram", []):
             ig_val = (ig_item.get("value") or "").strip()
+            if ig_val and not ig_existing:
+                ig_existing = ig_val
             ig_norm = normalize_instagram_url(ig_val) or (f"https://www.instagram.com/{ig_val.lstrip('@/')}" if ig_val and " " not in ig_val else "")
             if ig_norm:
                 companies_by_social.setdefault(ig_norm.lower(), rid)
 
+        has_loc = any(
+            bool((item.get("line_1") or "").strip() or (item.get("locality") or "").strip())
+            for item in locs
+        )
         company_state[rid] = {
             "industries": _extract_multiselect_titles(vals.get(INDUSTRY_ATTR_SLUG, [])),
             "domains": doms,
+            "facebook": fb_existing,
+            "instagram": ig_existing,
+            "has_location": has_loc,
         }
 
     for rec in client.query_all_records("people"):
@@ -1556,6 +1569,20 @@ def build_attio_indexes(client: AttioClient) -> dict[str, Any]:
         deliv_titles = _extract_multiselect_titles(vals.get("resend_last_delivery_status", []))
         is_bounced = bool(deliv_titles & {"bounced", "suppressed"})
 
+        person_phones: list[str] = []
+        for item in vals.get("phone_numbers", []):
+            raw_ph = item.get("phone_number") or item.get("original_phone_number") or ""
+            ph = normalize_phone_e164(raw_ph)
+            if not ph:
+                continue
+            person_phones.append(ph)
+            people_by_phone[ph] = {
+                "record_id": pid,
+                "company_id": linked_cid,
+            }
+            if linked_cid:
+                companies_by_phone.setdefault(ph, linked_cid)
+
         for item in vals.get("email_addresses", []):
             em = (item.get("email_address") or "").strip().lower()
             if not em:
@@ -1565,21 +1592,10 @@ def build_attio_indexes(client: AttioClient) -> dict[str, Any]:
             people_by_email[em] = {
                 "record_id": pid,
                 "company_id": linked_cid,
+                "has_phone": bool(person_phones),
             }
             if linked_cid:
                 companies_by_email.setdefault(em, linked_cid)
-
-        for item in vals.get("phone_numbers", []):
-            raw_ph = item.get("phone_number") or item.get("original_phone_number") or ""
-            ph = normalize_phone_e164(raw_ph)
-            if not ph:
-                continue
-            people_by_phone[ph] = {
-                "record_id": pid,
-                "company_id": linked_cid,
-            }
-            if linked_cid:
-                companies_by_phone.setdefault(ph, linked_cid)
 
     companies_by_unique_name = {
         nm: next(iter(cids))
@@ -1656,19 +1672,20 @@ def sync_leads_to_attio(
     *,
     dry_run: bool = False,
     sync_people: bool = True,
+    fill_missing: bool = False,
     enrich_existing: bool = False,
     lead_batch: str = "",
     lead_status: str = DEFAULT_NEW_LEAD_STATUS,
     verify_emails: bool = True,
     usercheck_api_key: str | None = None,
-    audit: dict[str, list[dict[str, str]]] | None = None,
+    audit: dict[str, list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     """Synchronizuje zdeduplikowane leady do `Companies` i `People` w Attio.
 
-    Domyślnie (`enrich_existing=False`) działa w trybie ścisłej deduplikacji:
-    jeśli lead już istnieje w Attio (po domenie, social media, e-mailu, telefonie,
-    nazwie+mieście, nazwie+kodzie pocztowym lub unikalnej nazwie), NIE jest dodawany.
-    Dla nowych leadów stosuje bramę jakości e-maili (DNC Attio + UserCheck MX/disposable).
+    Domyślnie (`fill_missing=False`, `enrich_existing=False`) działa w trybie ścisłej deduplikacji:
+    jeśli lead już istnieje w Attio, NIE jest dodawany ani modyfikowany.
+    W trybie `--fill-missing` (`fill_missing=True`) uzupełnia wyłącznie PUSTE pola na istniejących
+    rekordach (nigdy nie nadpisuje istniejących wartości) oraz dodaje nowo odkryte e-maile jako `People`.
     """
     indexes = build_attio_indexes(client)
     industry_counts: Counter[str] = Counter()
@@ -1676,6 +1693,30 @@ def sync_leads_to_attio(
     uc_cache = load_email_verify_cache() if (verify_emails and uc_key) else None
     uc_dirty = False
     rejected_emails_log = audit.setdefault("rejected_emails", []) if audit is not None else []
+    filled_companies_log = audit.setdefault("filled_missing_companies", []) if audit is not None else []
+
+    def _filter_deliverable_emails(candidate_emails: set[str], *, skip_already_indexed: bool = False) -> set[str]:
+        nonlocal uc_dirty
+        out_emails: set[str] = set()
+        for em in sorted(candidate_emails):
+            if em in indexes["dnc_emails"]:
+                stats["skipped_dnc_emails"] += 1
+                rejected_emails_log.append({"email": em, "reason": "attio_dnc"})
+                continue
+            if skip_already_indexed and em in indexes["people_by_email"]:
+                out_emails.add(em)
+                continue
+            if verify_emails and uc_key:
+                was_cached = uc_cache is not None and em in uc_cache
+                ok_uc, uc_reason = verify_email_usercheck(em, uc_key, cache=uc_cache)
+                if not was_cached:
+                    uc_dirty = True
+                if not ok_uc:
+                    stats["rejected_bad_emails"] += 1
+                    rejected_emails_log.append({"email": em, "reason": f"usercheck:{uc_reason}"})
+                    continue
+            out_emails.add(em)
+        return out_emails
 
     for lead in leads:
         for ind in lead.ordered_industries:
@@ -1686,31 +1727,53 @@ def sync_leads_to_attio(
             if domain_counts[d] == 1 and d not in indexes["companies_by_domain"]
         )
         matched_cid = _find_matching_company(lead, indexes)
+        is_existing_company = bool(matched_cid)
 
         if matched_cid:
-            if not enrich_existing or matched_cid.startswith("person:"):
+            if (not fill_missing and not enrich_existing) or matched_cid.startswith("person:"):
                 stats["skipped_existing_companies"] += 1
                 if sync_people and lead.emails:
                     stats["skipped_existing_people"] += len(lead.emails)
                 continue
 
-            # Tryb opcjonalny (--enrich-existing): dopisz brakujące branże / unikalne domeny
             state = indexes["company_state"].setdefault(
-                matched_cid, {"industries": set(), "domains": set()}
+                matched_cid,
+                {
+                    "industries": set(),
+                    "domains": set(),
+                    "facebook": "",
+                    "instagram": "",
+                    "has_location": False,
+                },
             )
-            missing_industries = [
-                ind for ind in lead.ordered_industries
-                if ind not in state["industries"]
-            ]
             patch_values: dict[str, Any] = {}
-            if missing_industries:
-                merged_inds = [
-                    ind for ind in SOUNDYOU_INDUSTRIES
-                    if ind in (state["industries"] | set(missing_industries))
+
+            if fill_missing:
+                # Fill-blanks-only: dopisz WYŁĄCZNIE pola, które w Attio są obecnie puste
+                if safe_domains and not state.get("domains"):
+                    patch_values["domains"] = safe_domains
+                if lead.instagram and not state.get("instagram"):
+                    patch_values["instagram"] = lead.instagram
+                if lead.facebook and not state.get("facebook"):
+                    patch_values["facebook"] = lead.facebook
+                if lead.ordered_industries and not state.get("industries"):
+                    patch_values[INDUSTRY_ATTR_SLUG] = lead.ordered_industries
+                if (lead.address or lead.city) and not state.get("has_location"):
+                    patch_values["primary_location"] = lead.company_values()["primary_location"]
+
+            if enrich_existing:
+                missing_industries = [
+                    ind for ind in lead.ordered_industries
+                    if ind not in state["industries"]
                 ]
-                patch_values[INDUSTRY_ATTR_SLUG] = merged_inds
-            if safe_domains and not state["domains"]:
-                patch_values["domains"] = safe_domains
+                if missing_industries:
+                    merged_inds = [
+                        ind for ind in SOUNDYOU_INDUSTRIES
+                        if ind in (state["industries"] | set(missing_industries))
+                    ]
+                    patch_values[INDUSTRY_ATTR_SLUG] = merged_inds
+                if safe_domains and not state.get("domains"):
+                    patch_values["domains"] = safe_domains
 
             if patch_values:
                 if not dry_run:
@@ -1726,32 +1789,36 @@ def sync_leads_to_attio(
                         continue
                 state["industries"].update(patch_values.get(INDUSTRY_ATTR_SLUG, []))
                 state["domains"].update(patch_values.get("domains", []))
+                if "facebook" in patch_values:
+                    state["facebook"] = patch_values["facebook"]
+                    indexes["companies_by_social"].setdefault(patch_values["facebook"].lower(), matched_cid)
+                if "instagram" in patch_values:
+                    state["instagram"] = patch_values["instagram"]
+                    indexes["companies_by_social"].setdefault(patch_values["instagram"].lower(), matched_cid)
+                if "primary_location" in patch_values:
+                    state["has_location"] = True
                 for d in patch_values.get("domains", []):
                     indexes["companies_by_domain"][d] = matched_cid
-                stats["updated_companies"] += 1
+
+                if fill_missing and not enrich_existing:
+                    stats["filled_missing_companies"] += 1
+                    filled_companies_log.append({
+                        "record_id": matched_cid,
+                        "name": lead.name,
+                        "filled_fields": sorted(patch_values.keys()),
+                    })
+                else:
+                    stats["updated_companies"] += 1
             else:
                 stats["skipped_existing_companies"] += 1
+
+            if sync_people and lead.emails:
+                lead.emails = _filter_deliverable_emails(lead.emails, skip_already_indexed=True)
             company_id = matched_cid
         else:
             # Brama jakości e-maili (DNC Attio + UserCheck MX/disposable) TYLKO dla nowych leadów
             if lead.emails:
-                verified_emails: set[str] = set()
-                for em in sorted(lead.emails):
-                    if em in indexes["dnc_emails"]:
-                        stats["skipped_dnc_emails"] += 1
-                        rejected_emails_log.append({"email": em, "reason": "attio_dnc"})
-                        continue
-                    if verify_emails and uc_key:
-                        was_cached = uc_cache is not None and em in uc_cache
-                        ok_uc, uc_reason = verify_email_usercheck(em, uc_key, cache=uc_cache)
-                        if not was_cached:
-                            uc_dirty = True
-                        if not ok_uc:
-                            stats["rejected_bad_emails"] += 1
-                            rejected_emails_log.append({"email": em, "reason": f"usercheck:{uc_reason}"})
-                            continue
-                    verified_emails.add(em)
-                lead.emails = verified_emails
+                lead.emails = _filter_deliverable_emails(lead.emails)
 
             # Nowa firma — wymagaj co najmniej 1 sygnału kontaktowego/tożsamościowego
             if not (lead.emails or lead.phones or safe_domains or lead.facebook or lead.instagram):
@@ -1798,6 +1865,9 @@ def sync_leads_to_attio(
             indexes["company_state"][company_id] = {
                 "industries": set(lead.ordered_industries),
                 "domains": set(safe_domains),
+                "facebook": lead.facebook,
+                "instagram": lead.instagram,
+                "has_location": bool(lead.address or lead.city),
             }
             stats["created_companies"] += 1
 
@@ -1806,32 +1876,50 @@ def sync_leads_to_attio(
             continue
 
         primary_phone = sorted(lead.phones)[0] if lead.phones else ""
-        for email in sorted(lead.emails):
+        # Najpierw obsłuż kontakty już istniejące w Attio, potem twórz nowo odkryte adresy
+        ordered_emails = sorted(lead.emails, key=lambda e: (e not in indexes["people_by_email"], e))
+        for email in ordered_emails:
             existing_person = indexes["people_by_email"].get(email)
             if existing_person:
-                if enrich_existing and not existing_person.get("company_id"):
+                person_patch: dict[str, Any] = {}
+                if (fill_missing or enrich_existing) and not existing_person.get("company_id"):
+                    person_patch["company"] = {
+                        "target_object": "companies",
+                        "target_record_id": company_id,
+                    }
+                ph_owner_cid = (indexes["people_by_phone"].get(primary_phone) or {}).get("company_id")
+                if (
+                    fill_missing
+                    and primary_phone
+                    and not existing_person.get("has_phone")
+                    and ph_owner_cid in (None, company_id)
+                ):
+                    person_patch["phone_numbers"] = [primary_phone]
+
+                if person_patch:
                     if not dry_run:
                         try:
                             client.request(
                                 f"/objects/people/records/{existing_person['record_id']}",
-                                {
-                                    "data": {
-                                        "values": {
-                                            "company": {
-                                                "target_object": "companies",
-                                                "target_record_id": company_id,
-                                            }
-                                        }
-                                    }
-                                },
+                                {"data": {"values": person_patch}},
                                 method="PATCH",
                             )
                         except AttioAPIError as err:
                             logger.warning("PATCH person %s failed: %s", email, err)
                             stats[f"person_patch_error_{err.status}"] += 1
                             continue
-                    existing_person["company_id"] = company_id
-                    stats["linked_existing_people"] += 1
+                    if "company" in person_patch:
+                        existing_person["company_id"] = company_id
+                    if "phone_numbers" in person_patch:
+                        existing_person["has_phone"] = True
+                        indexes["people_by_phone"][primary_phone] = {
+                            "record_id": existing_person["record_id"],
+                            "company_id": company_id,
+                        }
+                    if fill_missing and not enrich_existing:
+                        stats["filled_missing_people"] += 1
+                    else:
+                        stats["linked_existing_people"] += 1
                 else:
                     stats["skipped_existing_people"] += 1
                 continue
@@ -1847,7 +1935,7 @@ def sync_leads_to_attio(
                     f"Branża: {', '.join(lead.ordered_industries)}"
                 ),
             }
-            if primary_phone:
+            if primary_phone and primary_phone not in indexes["people_by_phone"]:
                 person_values["phone_numbers"] = [primary_phone]
             if lead.city or lead.region:
                 person_values["primary_location"] = {
@@ -1874,8 +1962,16 @@ def sync_leads_to_attio(
             indexes["people_by_email"][email] = {
                 "record_id": person_id,
                 "company_id": company_id,
+                "has_phone": "phone_numbers" in person_values,
             }
+            if "phone_numbers" in person_values:
+                indexes["people_by_phone"][primary_phone] = {
+                    "record_id": person_id,
+                    "company_id": company_id,
+                }
             stats["created_people"] += 1
+            if is_existing_company and fill_missing:
+                stats["created_people_for_existing_companies"] += 1
 
     if uc_dirty and uc_cache is not None:
         save_email_verify_cache(uc_cache)
@@ -1917,6 +2013,7 @@ def sync_csv_to_attio(
     offline_dry_run: bool = False,
     ensure_schema: bool = True,
     sync_people: bool = True,
+    fill_missing: bool = False,
     enrich_existing: bool = False,
     lead_batch: str | None = None,
     verify_emails: bool = True,
@@ -1934,10 +2031,11 @@ def sync_csv_to_attio(
         if lead_batch is not None
         else f"{datetime.now().strftime('%Y-%m-%d')} | {path.stem}"
     )
-    audit: dict[str, list[dict[str, str]]] = {
+    audit: dict[str, list[dict[str, Any]]] = {
         "inferred_names": [],
         "rejected_emails": [],
         "non_icp_skipped": [],
+        "filled_missing_companies": [],
     }
     leads, stats, domain_counts = load_and_dedup_csv(
         [path],
@@ -1983,6 +2081,7 @@ def sync_csv_to_attio(
         domain_counts,
         dry_run=dry_run,
         sync_people=sync_people,
+        fill_missing=fill_missing,
         enrich_existing=enrich_existing,
         lead_batch=effective_batch,
         verify_emails=verify_emails,
@@ -2041,9 +2140,14 @@ def main() -> int:
         help="Twórz tylko nowe `Companies`, bez rekordów `People`",
     )
     parser.add_argument(
+        "--fill-missing",
+        action="store_true",
+        help="Tryb fill-blanks-only: dla firm już istniejących w Attio uzupełnij WYŁĄCZNIE puste pola (np. brakujące WWW, IG, FB, branżę, lokalizację) i dodaj nowo znalezione e-maile jako People — nigdy nie nadpisuj istniejących wartości",
+    )
+    parser.add_argument(
         "--enrich-existing",
         action="store_true",
-        help="Opcjonalnie dopisuj brakujące branże/domeny do firm już istniejących w Attio (domyślnie istniejące leady są całkowicie pomijane)",
+        help="Opcjonalnie dopisuj brakujące tagi multiselect do `soundyou_industry` na istniejących firmach",
     )
     parser.add_argument(
         "--batch",
@@ -2090,6 +2194,7 @@ def main() -> int:
             offline_dry_run=args.offline_dry_run,
             ensure_schema=not args.no_ensure_schema,
             sync_people=not args.companies_only,
+            fill_missing=args.fill_missing,
             enrich_existing=args.enrich_existing,
             lead_batch=args.batch,
             verify_emails=not args.no_verify_emails,

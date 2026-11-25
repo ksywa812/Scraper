@@ -7,7 +7,8 @@
 - automatyczne zbieranie linków **Facebook** i **Instagram** oraz osobne kolumny w Attio,
 - samodzielne rozpoznawanie nazwy firmy (`resolve_company_name`) przy braku/niejasnej nazwie,
 - **Krok A:** pipeline sprzedażowy **`Status leada`** (`lead_status` + widok Kanban), **`Partia importu`** (`lead_batch`) i ustrukturyzowane raporty JSON z każdego przebiegu (`logs/attio_sync_*.json`),
-- **Krok B:** bramę jakości e-maili (literówki TLD np. `.coml`/`.pll`, domeny jednorazowe, weryfikacja MX/disposable w **UserCheck API** ze współdzielonym cache oraz tarcza **DNC** z Attio) i filtr **anty-ICP** (odrzucanie Auto SPA, pralni, agencji IT/SEO/hostingów).
+- **Krok B:** bramę jakości e-maili (literówki TLD np. `.coml`/`.pll`, domeny jednorazowe, weryfikacja MX/disposable w **UserCheck API** ze współdzielonym cache oraz tarcza **DNC** z Attio) i filtr **anty-ICP** (odrzucanie Auto SPA, pralni, agencji IT/SEO/hostingów),
+- **Krok 4 (Krok D):** opcjonalny tryb **`--fill-missing`** (*fill-blanks-only*) — bezpieczne uzupełnianie wyłącznie pustych pól (brakującej strony WWW, Instagrama, Facebooka, branży, lokalizacji, telefonu oraz nowo odkrytych adresów e-mail jako `People`) na firmach już istniejących w Attio, **bez nadpisywania jakichkolwiek istniejących wartości**.
 
 ---
 
@@ -50,7 +51,12 @@
      4. numerze telefonu `+48XXXXXXXXX` (`companies_by_phone`, `people_by_phone`),
      5. `(nazwa, miasto)` oraz `(nazwa, kod pocztowy)` (`XX-XXX`),
      6. unikalnej nazwie firmy w Attio (≥ 5 znaków).
-   - **Zasada „istnieje = pomiń” (`enrich_existing=False` domyślnie):** rekordy istniejące w Attio są całkowicie pomijane (`0` zapisów `POST`/`PATCH`).
+   - **Zasada „istnieje = pomiń” (`fill_missing=False`, `enrich_existing=False` domyślnie):** rekordy istniejące w Attio są całkowicie pomijane (`0` zapisów `POST`/`PATCH`).
+   - **Opcjonalny tryb `--fill-missing` (*fill-blanks-only*):**
+     - gdy firma już jest w Attio (np. wcześniej dodana z samego telefonu z Google Maps), a kolejny scraping znajdzie jej stronę WWW, Instagrama, Facebooka lub adres e-mail, flaga `--fill-missing` (lub `--attio-fill-missing` w `scraper.py`) dopisze **wyłącznie pola, które w Attio są puste**:
+       - na `Companies`: puste `domains`, `instagram`, `facebook`, `soundyou_industry`, `primary_location` (nigdy nie nadpisuje nazwy, opisu, statusu, partii ani ustawionych już wartości!),
+       - na `People`: tworzy nowe rekordy `People` dla nowo odkrytych adresów e-mail (po przejściu przez bramę DNC + UserCheck) oraz dopisuje brakujące powiązanie `company` lub pusty `phone_numbers` na istniejącym kontakcie,
+       - pełna lista uzupełnionych pól trafia do raportu przebiegu pod kluczem `audit.filled_missing_companies`.
    - **Brama dostarczalności e-maili dla nowych leadów:**
      - blokuje adresy z listy **DNC** w Attio (`resend_unsubscribed = true` lub `bounced`/`suppressed`),
      - weryfikuje nowe adresy przez **UserCheck API** (`mx`, `disposable`, `blocklisted`, `spam`) ze współdzielonym z `resend_sender.py` cache w `data/Raport/email_verify_cache.json` (odpytywane są wyłącznie nowe leady nieistniejące jeszcze w Attio).
@@ -95,7 +101,13 @@ Gdy nazwa ze scrapingu jest niejasna (`is_unclear_company_name`), skrypt sam wyb
    ```powershell
    .\.venv\Scripts\python.exe attio_sync.py --batch "2026-11-25 | SoundYouLeads"
    ```
-4. Pełny scraping nowej branży/miasta z zapisem do CSV i Attio:
+4. Tryb *fill-blanks-only* (dodaj nowe leady + uzupełnij wyłącznie puste pola WWW/IG/FB/nowe e-maile na istniejących firmach, bez nadpisywania):
+   ```powershell
+   .\.venv\Scripts\python.exe attio_sync.py --fill-missing
+   ```
+   *(lub podgląd bez zapisu: `python attio_sync.py --fill-missing --dry-run`)*
+5. Pełny scraping nowej branży/miasta z zapisem do CSV i Attio:
    ```powershell
    .\.venv\Scripts\python.exe scraper.py --query kawiarnia --location Wroclaw --emails --use-google --sync-attio
    ```
+   *(z uzupełnianiem pustych pól na istniejących firmach: dodaj `--attio-fill-missing`)*

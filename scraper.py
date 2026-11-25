@@ -4261,6 +4261,7 @@ def main():
     parser.add_argument("--headless-wait", type=int, default=3, help="Seconds to wait after render in headless mode")
     parser.add_argument("--sync-attio", action="store_true", help="Automatically sync deduplicated CSV leads to Attio after scraping")
     parser.add_argument("--attio-dry-run", action="store_true", help="Run Attio sync in dry-run mode (no writes)")
+    parser.add_argument("--attio-fill-missing", action="store_true", help="Fill only empty fields (WWW, IG, FB, new emails) on existing Attio leads without overwriting")
     args = parser.parse_args()
 
     # Walidacja: odrzuć argumenty wyglądające jak ścieżki pliku (artefakty bat/shell)
@@ -4869,7 +4870,7 @@ def main():
         append_to_csv_master(all_results, csv_master_path)
         logger.info("Appended %d records to CSV master: %s", len(all_results), csv_master_path)
 
-        if (args.sync_attio or args.attio_dry_run) and sync_csv_to_attio is not None:
+        if (args.sync_attio or args.attio_dry_run or args.attio_fill_missing) and sync_csv_to_attio is not None:
             try:
                 logger.info("Synchronizing CSV master to Attio (%s)...", "dry-run" if args.attio_dry_run else "apply")
                 batch_label = f"{datetime.now().strftime('%Y-%m-%d')} | {query}-{location}"
@@ -4878,6 +4879,7 @@ def main():
                     dry_run=args.attio_dry_run,
                     ensure_schema=True,
                     sync_people=True,
+                    fill_missing=args.attio_fill_missing,
                     lead_batch=batch_label,
                 )
                 logger.info("Attio sync complete: %s", json.dumps(attio_report.get("stats", {}), ensure_ascii=False))
