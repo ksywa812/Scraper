@@ -66,6 +66,7 @@ PROTECTED_LEAD_STATUSES = frozenset({
     "Rozmowa / Demo",
     "Trial SoundYou",
     "Klient",
+    "Były klient",
 })
 
 EARLY_LEAD_STATUSES = frozenset({

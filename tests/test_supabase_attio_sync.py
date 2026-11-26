@@ -73,22 +73,35 @@ class TestSupabaseAttioSync:
             assert canonical_attio in mapped, f"{app_label} -> {mapped}"
 
     def test_classify_profile_and_status_precedence_never_downgrades_client(self):
-        assert smod.classify_profile_target_status({"plan": "Pro"}) == "Klient"
-        assert smod.classify_profile_target_status({"plan": "Standard"}) == "Klient"
+        assert smod.classify_profile_target_status({"plan": "Pro", "valid_until": "2027-05-01"}, today_iso="2026-11-26") == "Klient"
+        assert smod.classify_profile_target_status({"plan": "Standard"}, today_iso="2026-11-26") == "Klient"
+        assert smod.classify_profile_target_status(
+            {"plan": "Business", "subscription_cancelled_at": "2026-11-10T12:00:00Z"},
+            today_iso="2026-11-26",
+        ) == "Były klient"
+        assert smod.classify_profile_target_status(
+            {"plan": "Pro", "valid_until": "2026-10-01"},
+            today_iso="2026-11-26",
+        ) == "Były klient"
         assert smod.classify_profile_target_status({"plan": "Trial"}) == "Trial SoundYou"
         assert smod.classify_profile_target_status({"plan": "", "onboarding_completed": True}) == "Trial SoundYou"
         assert smod.classify_profile_target_status({"plan": "", "marketing_opt_out": True}) == "Odrzucony / DNC"
         assert smod.classify_profile_target_status({"plan": ""}) is None
 
-        # Awans w górę działa:
+        # Awans w górę działa + dwukierunkowe przejście Klient <-> Były klient:
         assert smod.compute_status_upgrade("Wysłano kampanię", "Trial SoundYou") == "Trial SoundYou"
         assert smod.compute_status_upgrade("Trial SoundYou", "Klient") == "Klient"
+        assert smod.compute_status_upgrade("Klient", "Były klient") == "Były klient"
+        assert smod.compute_status_upgrade("Były klient", "Klient") == "Klient"
         # Konwersja w aplikacji przebija nawet wcześniejsze Odrzucony / DNC:
         assert smod.compute_status_upgrade("Odrzucony / DNC", "Trial SoundYou") == "Trial SoundYou"
+        assert smod.compute_status_upgrade("Odrzucony / DNC", "Były klient") == "Były klient"
         assert smod.compute_status_upgrade("Odrzucony / DNC", "Klient") == "Klient"
-        # NIGDY nie cofa Klienta do Triala ani Odrzucony:
+        # NIGDY nie cofa Klienta / Byłego klienta do Triala ani Odrzucony:
         assert smod.compute_status_upgrade("Klient", "Trial SoundYou") is None
+        assert smod.compute_status_upgrade("Były klient", "Trial SoundYou") is None
         assert smod.compute_status_upgrade("Klient", "Odrzucony / DNC") is None
+        assert smod.compute_status_upgrade("Były klient", "Odrzucony / DNC") is None
         assert smod.compute_status_upgrade("Trial SoundYou", "Odrzucony / DNC") is None
 
     def test_matches_gmail_trial_via_person_link_and_paid_client_via_corporate_domain(self):
@@ -105,7 +118,7 @@ class TestSupabaseAttioSync:
                     "onboarding_completed": True,
                     "marketing_opt_out": False,
                 },
-                # 2. Hotel z własną domeną @hotelbursztyn.pl na płatnym planie + marketing_opt_out -> 'Klient' + unsub na People
+                # 2. Hotel z własną domeną @hotelbursztyn.pl na płatnym planie + marketing_opt_out -> 'Klient' + plan + valid_until + unsub na People
                 {
                     "id": "p-2",
                     "email": "manager@hotelbursztyn.pl",
@@ -113,6 +126,7 @@ class TestSupabaseAttioSync:
                     "business": "Hotel",
                     "country": "PL",
                     "plan": "Business",
+                    "valid_until": "2027-06-30T23:59:59Z",
                     "stripe_customer_id": "cus_123",
                     "onboarding_completed": True,
                     "marketing_opt_out": True,
@@ -125,6 +139,19 @@ class TestSupabaseAttioSync:
                     "business": "Spa",
                     "country": "PL",
                     "plan": "Trial",
+                    "onboarding_completed": True,
+                    "marketing_opt_out": False,
+                },
+                # 4. Anulowana subskrypcja dawnego klienta -> przechodzi z 'Klient' na 'Były klient' z zachowaniem planu i daty wygaśnięcia
+                {
+                    "id": "p-4",
+                    "email": "kontakt@bistrozielone.pl",
+                    "business_name": "Bistro Zielone",
+                    "business": "Restauracja",
+                    "country": "PL",
+                    "plan": "Standard",
+                    "valid_until": "2026-10-15",
+                    "subscription_cancelled_at": "2026-10-10T09:00:00Z",
                     "onboarding_completed": True,
                     "marketing_opt_out": False,
                 },
@@ -160,6 +187,15 @@ class TestSupabaseAttioSync:
                         "lead_status": [{"status": {"title": "Klient"}}],
                     },
                 },
+                {
+                    "id": {"record_id": "comp-churned"},
+                    "values": {
+                        "name": [{"value": "Bistro Zielone"}],
+                        "domains": [{"domain": "bistrozielone.pl"}],
+                        "soundyou_industry": [{"option": {"title": "Restauracje"}}],
+                        "lead_status": [{"status": {"title": "Klient"}}],
+                    },
+                },
             ],
             people=[
                 {
@@ -187,11 +223,12 @@ class TestSupabaseAttioSync:
         # Zapytania GET do Attio powinny być zbuforowane (po 1 razie na obiekt)
         assert attio.query_counts == {"companies": 1, "people": 1}
 
-        assert stats["matched_existing_companies"] == 3
+        assert stats["matched_existing_companies"] == 4
         assert stats["status_to_Trial SoundYou"] == 1
         assert stats["status_to_Klient"] == 1
+        assert stats["status_to_Były klient"] == 1
         assert stats["unchanged_companies"] == 1  # comp-client pozostał 'Klient'
-        assert stats["created_people"] == 1  # manager@hotelbursztyn.pl utworzony i oznaczony unsubscribed
+        assert stats["created_people"] == 2  # manager@hotelbursztyn.pl + kontakt@bistrozielone.pl
         assert stats["people_marked_unsubscribed"] == 1
 
         patch_comp_calls = {
@@ -201,10 +238,18 @@ class TestSupabaseAttioSync:
         }
         assert patch_comp_calls["/objects/companies/records/comp-gmail"] == {
             "lead_status": "Trial SoundYou",
+            "soundyou_plan": "Trial",
             "soundyou_industry": ["SPA & Wellness", "Kobido & Masaż"],
         }
         assert patch_comp_calls["/objects/companies/records/comp-hotel"] == {
             "lead_status": "Klient",
+            "soundyou_plan": "Business",
+            "soundyou_valid_until": "2027-06-30",
+        }
+        assert patch_comp_calls["/objects/companies/records/comp-churned"] == {
+            "lead_status": "Były klient",
+            "soundyou_plan": "Standard",
+            "soundyou_valid_until": "2026-10-15",
         }
         assert "/objects/companies/records/comp-client" not in patch_comp_calls
 
@@ -213,7 +258,7 @@ class TestSupabaseAttioSync:
             for m, path, payload in attio.calls
             if m == "POST" and path == "/objects/people/records"
         ]
-        assert len(post_person_calls) == 1
+        assert len(post_person_calls) == 2
         assert post_person_calls[0]["email_addresses"] == ["manager@hotelbursztyn.pl"]
         assert post_person_calls[0]["resend_unsubscribed"] is True
 

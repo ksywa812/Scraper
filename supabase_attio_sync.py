@@ -41,6 +41,7 @@ import re
 import sys
 import time
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError
@@ -62,6 +63,8 @@ from attio_sync import (
     LEAD_STATUS_SLUG,
     PLATFORM_DOMAINS,
     REPORTS_DIR,
+    SOUNDYOU_PLAN_SLUG,
+    SOUNDYOU_VALID_UNTIL_SLUG,
     _NoRedirect,
     _extract_multiselect_titles,
     build_attio_indexes,
@@ -84,7 +87,7 @@ logger = logging.getLogger("supabase_attio_sync")
 DEFAULT_SUPABASE_BATCH = "SoundYou App (Supabase)"
 NON_PAID_PLAN_TOKENS = frozenset({"", "trial", "free", "demo", "none", "test", "brak"})
 
-# Hierarchia statusów w lejku: wyższa liczba = wyższy etap konwersji (nigdy nie cofamy w dół)
+# Hierarchia statusów w lejku: wyższa liczba = wyższy etap konwersji
 STATUS_PRECEDENCE: dict[str, int] = {
     "": 0,
     "Nowy": 10,
@@ -93,6 +96,7 @@ STATUS_PRECEDENCE: dict[str, int] = {
     "Zainteresowany": 40,
     "Rozmowa / Demo": 60,
     "Trial SoundYou": 80,
+    "Były klient": 95,
     "Klient": 100,
 }
 
@@ -227,15 +231,32 @@ def extract_corporate_domain(email: str) -> str:
     return business_domain(dom)
 
 
-def classify_profile_target_status(profile: dict[str, Any]) -> str | None:
-    """Mapuje wiersz `public.profiles` na docelowy `Status leada` w Attio (lub `None`)."""
+def extract_iso_date(raw_val: Any) -> str:
+    """Wyciąga datę w formacie `YYYY-MM-DD` z pola `valid_until` (lub zwraca `""`)."""
+    s = str(raw_val or "").strip()
+    if len(s) >= 10 and re.fullmatch(r"\d{4}-\d{2}-\d{2}", s[:10]):
+        return s[:10]
+    return ""
+
+
+def _utc_today_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def classify_profile_target_status(profile: dict[str, Any], *, today_iso: str | None = None) -> str | None:
+    """Mapuje wiersz `public.profiles` na docelowy `Status leada` w Attio (`Klient`, `Były klient`, `Trial SoundYou`, `Odrzucony / DNC` lub `None`)."""
     raw_plan = str(profile.get("plan") or "").strip()
     plan_low = raw_plan.lower()
     has_stripe = bool(str(profile.get("stripe_customer_id") or "").strip())
     onboarded = bool(profile.get("onboarding_completed") is True)
     opt_out = bool(profile.get("marketing_opt_out") is True)
+    cancelled = bool(str(profile.get("subscription_cancelled_at") or "").strip())
+    valid_date = extract_iso_date(profile.get("valid_until"))
+    today = today_iso or _utc_today_iso()
 
     if plan_low and plan_low not in NON_PAID_PLAN_TOKENS:
+        if cancelled or (valid_date and valid_date < today):
+            return "Były klient"
         return "Klient"
 
     if plan_low == "trial" or onboarded or has_stripe:
@@ -248,7 +269,7 @@ def classify_profile_target_status(profile: dict[str, Any]) -> str | None:
 
 
 def compute_status_upgrade(current_status: str, target_status: str | None) -> str | None:
-    """Zwraca nowy `lead_status` tylko gdy stanowi awans w lejku (nigdy nie cofa `Klient` -> `Trial`)."""
+    """Zwraca nowy `lead_status`: wspiera awans w górę oraz dwukierunkowe przejście `Klient` <-> `Były klient` (nigdy nie cofa klienta do `Trial`)."""
     if not target_status:
         return None
     cur = (current_status or "").strip()
@@ -256,12 +277,16 @@ def compute_status_upgrade(current_status: str, target_status: str | None) -> st
         return None
 
     if target_status == "Odrzucony / DNC":
-        # Nie oznaczaj aktywnych rozmów/triali/klientów jako Odrzucony (wypisanie trafia na People.resend_unsubscribed)
+        # Nie oznaczaj aktywnych rozmów/triali/klientów/byłych klientów jako Odrzucony (wypisanie trafia na People.resend_unsubscribed)
         if STATUS_PRECEDENCE.get(cur, 0) >= STATUS_PRECEDENCE["Rozmowa / Demo"]:
             return None
         return "Odrzucony / DNC"
 
-    # Realna konwersja w aplikacji (Trial / Klient / Demo) przebija nawet wcześniejsze Odrzucony / DNC
+    # Aktywny klient, któremu wygasła lub została anulowana subskrypcja -> 'Były klient'
+    if cur == "Klient" and target_status == "Były klient":
+        return "Były klient"
+
+    # Realna konwersja w aplikacji (Trial / Były klient / Klient) przebija nawet wcześniejsze Odrzucony / DNC
     if cur == "Odrzucony / DNC":
         if STATUS_PRECEDENCE.get(target_status, 0) >= STATUS_PRECEDENCE["Trial SoundYou"]:
             return target_status
@@ -316,13 +341,25 @@ class _CachedQueryAttioProxy:
         return self._inner.request(path, payload)
 
 
-def load_attio_status_and_unsub(attio: Any) -> tuple[dict[str, str], dict[str, bool]]:
-    """Zwraca słowniki `company_id -> lead_status` oraz `person_id -> resend_unsubscribed`."""
-    company_statuses: dict[str, str] = {}
+def _extract_single_date(raw_vals: list[dict[str, Any]]) -> str:
+    for item in raw_vals or []:
+        val = item.get("value")
+        if isinstance(val, str) and val.strip():
+            return extract_iso_date(val)
+    return ""
+
+
+def load_attio_status_and_unsub(attio: Any) -> tuple[dict[str, dict[str, str]], dict[str, bool]]:
+    """Zwraca słowniki `company_id -> {lead_status, plan, valid_until}` oraz `person_id -> resend_unsubscribed`."""
+    company_meta: dict[str, dict[str, str]] = {}
     for rec in attio.query_all_records("companies"):
         cid = rec["id"]["record_id"]
         vals = rec.get("values") or {}
-        company_statuses[cid] = _extract_status_title(vals.get(LEAD_STATUS_SLUG, []))
+        company_meta[cid] = {
+            "lead_status": _extract_status_title(vals.get(LEAD_STATUS_SLUG, [])),
+            "plan": _extract_single_text(vals.get(SOUNDYOU_PLAN_SLUG, [])),
+            "valid_until": _extract_single_date(vals.get(SOUNDYOU_VALID_UNTIL_SLUG, [])),
+        }
 
     person_unsubs: dict[str, bool] = {}
     for rec in attio.query_all_records("people"):
@@ -330,7 +367,7 @@ def load_attio_status_and_unsub(attio: Any) -> tuple[dict[str, str], dict[str, b
         vals = rec.get("values") or {}
         person_unsubs[pid] = _extract_single_bool(vals.get("resend_unsubscribed", []))
 
-    return company_statuses, person_unsubs
+    return company_meta, person_unsubs
 
 
 def _match_profile_to_company(
@@ -388,9 +425,11 @@ def sync_supabase_to_attio(
 
     cached_attio = _CachedQueryAttioProxy(attio)
     indexes = build_attio_indexes(cached_attio)  # type: ignore[arg-type]
-    company_statuses, person_unsubs = load_attio_status_and_unsub(cached_attio)
+    company_meta, person_unsubs = load_attio_status_and_unsub(cached_attio)
 
     profile_emails_seen: set[str] = set()
+    active_client_cids: set[str] = set()
+    today = _utc_today_iso()
 
     for prof in profiles:
         email = str(prof.get("email") or "").strip().lower()
@@ -400,7 +439,11 @@ def sync_supabase_to_attio(
             continue
         profile_emails_seen.add(email)
 
-        target_status = classify_profile_target_status(prof)
+        target_status = classify_profile_target_status(prof, today_iso=today)
+        raw_plan_display = str(prof.get("plan") or "").strip() or (
+            "Trial" if target_status == "Trial SoundYou" else ""
+        )
+        valid_until_iso = extract_iso_date(prof.get("valid_until"))
         opt_out = bool(prof.get("marketing_opt_out") is True)
         business_name = str(prof.get("business_name") or "").strip()
         raw_business = str(prof.get("business") or "").strip()
@@ -418,8 +461,18 @@ def sync_supabase_to_attio(
 
         if matched_cid:
             stats["matched_existing_companies"] += 1
-            cur_status = company_statuses.get(matched_cid, "")
-            next_status = compute_status_upgrade(cur_status, target_status)
+            meta = company_meta.setdefault(matched_cid, {"lead_status": "", "plan": "", "valid_until": ""})
+            cur_status = meta["lead_status"]
+            # Jeśli w tym samym przebiegu inne konto właściciela tej firmy jest aktywnym 'Klientem', nie obniżaj go do 'Były klient'
+            effective_target = (
+                None
+                if (target_status == "Były klient" and matched_cid in active_client_cids)
+                else target_status
+            )
+            next_status = compute_status_upgrade(cur_status, effective_target)
+            if target_status == "Klient" or (cur_status == "Klient" and next_status is None):
+                active_client_cids.add(matched_cid)
+
             state = indexes["company_state"].setdefault(
                 matched_cid,
                 {"industries": set(), "domains": set(), "facebook": "", "instagram": "", "has_location": False},
@@ -428,6 +481,15 @@ def sync_supabase_to_attio(
             comp_patch: dict[str, Any] = {}
             if next_status:
                 comp_patch[LEAD_STATUS_SLUG] = next_status
+            # Nie nadpisuj aktywnego planu starym kontem Trial, jeśli firma jest już Klientem / Byłym klientem
+            can_update_plan_fields = not (
+                STATUS_PRECEDENCE.get(cur_status, 0) >= STATUS_PRECEDENCE["Były klient"]
+                and STATUS_PRECEDENCE.get(target_status or "", 0) < STATUS_PRECEDENCE["Były klient"]
+            )
+            if can_update_plan_fields and raw_plan_display and meta.get("plan") != raw_plan_display:
+                comp_patch[SOUNDYOU_PLAN_SLUG] = raw_plan_display
+            if can_update_plan_fields and valid_until_iso and meta.get("valid_until") != valid_until_iso:
+                comp_patch[SOUNDYOU_VALID_UNTIL_SLUG] = valid_until_iso
             if has_specific_industry and not state.get("industries"):
                 comp_patch[INDUSTRY_ATTR_SLUG] = inferred_industries
             if corp_domain and not state.get("domains") and corp_domain not in indexes["companies_by_domain"]:
@@ -446,15 +508,20 @@ def sync_supabase_to_attio(
                         stats[f"company_patch_error_{err.status}"] += 1
                         continue
                 if next_status:
-                    company_statuses[matched_cid] = next_status
+                    meta["lead_status"] = next_status
                     stats[f"status_to_{next_status}"] += 1
                     audit["upgraded_companies"].append({
                         "company_id": matched_cid,
                         "email": email,
                         "previous_status": cur_status,
                         "new_status": next_status,
-                        "plan": prof.get("plan"),
+                        "plan": raw_plan_display,
+                        "valid_until": valid_until_iso,
                     })
+                if SOUNDYOU_PLAN_SLUG in comp_patch:
+                    meta["plan"] = comp_patch[SOUNDYOU_PLAN_SLUG]
+                if SOUNDYOU_VALID_UNTIL_SLUG in comp_patch:
+                    meta["valid_until"] = comp_patch[SOUNDYOU_VALID_UNTIL_SLUG]
                 if INDUSTRY_ATTR_SLUG in comp_patch:
                     state["industries"].update(comp_patch[INDUSTRY_ATTR_SLUG])
                 if "domains" in comp_patch:
@@ -466,8 +533,8 @@ def sync_supabase_to_attio(
 
             company_id = matched_cid
         else:
-            # Brak firmy w Attio — twórz nowe rekordy tylko dla realnych Triali / Klientów, gdy create_missing=True
-            if not create_missing or target_status not in ("Trial SoundYou", "Klient"):
+            # Brak firmy w Attio — twórz nowe rekordy tylko dla realnych Triali / Klientów / Byłych klientów, gdy create_missing=True
+            if not create_missing or target_status not in ("Trial SoundYou", "Klient", "Były klient"):
                 stats["skipped_unmatched_profiles"] += 1
                 # Jeśli sam Person już istnieje w Attio i ma opt_out, nadal zsynchronizuj wypisanie
                 existing_p = indexes["people_by_email"].get(email)
@@ -494,12 +561,16 @@ def sync_supabase_to_attio(
                 LEAD_BATCH_SLUG: lead_batch,
                 "description": (
                     f"Źródło: SoundYou App (Supabase) | E-mail: {email} | "
-                    f"Plan: {prof.get('plan') or 'Trial'}"
+                    f"Plan: {raw_plan_display or 'Trial'}"
                 ),
                 "primary_location": {
                     "country_code": _normalize_country_code(prof.get("country")),
                 },
             }
+            if raw_plan_display:
+                comp_values[SOUNDYOU_PLAN_SLUG] = raw_plan_display
+            if valid_until_iso:
+                comp_values[SOUNDYOU_VALID_UNTIL_SLUG] = valid_until_iso
             if corp_domain and corp_domain not in indexes["companies_by_domain"]:
                 comp_values["domains"] = [corp_domain]
 
@@ -518,7 +589,13 @@ def sync_supabase_to_attio(
                     continue
                 company_id = created_c["id"]["record_id"]
 
-            company_statuses[company_id] = target_status
+            if target_status == "Klient":
+                active_client_cids.add(company_id)
+            company_meta[company_id] = {
+                "lead_status": target_status,
+                "plan": raw_plan_display,
+                "valid_until": valid_until_iso,
+            }
             norm_cn = normalized(comp_name)
             if norm_cn:
                 indexes["companies_by_name_city"][(norm_cn, "")] = company_id
@@ -626,7 +703,7 @@ def sync_supabase_to_attio(
             cid = _match_profile_to_company(em, corp_dom, "", indexes)
             if not cid:
                 continue
-            cur_st = company_statuses.get(cid, "")
+            cur_st = company_meta.get(cid, {}).get("lead_status", "")
             next_st = compute_status_upgrade(cur_st, "Rozmowa / Demo")
             if not next_st:
                 continue
@@ -640,7 +717,7 @@ def sync_supabase_to_attio(
                 except AttioAPIError as err:
                     stats[f"company_patch_error_{err.status}"] += 1
                     continue
-            company_statuses[cid] = next_st
+            company_meta.setdefault(cid, {"lead_status": "", "plan": "", "valid_until": ""})["lead_status"] = next_st
             stats["demo_plays_upgraded"] += 1
             stats[f"status_to_{next_st}"] += 1
 
@@ -733,8 +810,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  Zaktualizowane firmy w Attio           : {stats.get('updated_companies', 0)}")
     print(f"  Utworzone nowe firmy z aplikacji       : {stats.get('created_companies', 0)}")
     print(f"  Utworzone nowe kontakty (People)       : {stats.get('created_people', 0)}")
-    print(f"  Awans do 'Klient'                      : {stats.get('status_to_Klient', 0)}")
-    print(f"  Awans do 'Trial SoundYou'              : {stats.get('status_to_Trial SoundYou', 0)}")
+    print(f"  Status -> 'Klient' (aktywny)           : {stats.get('status_to_Klient', 0)}")
+    print(f"  Status -> 'Były klient' (wygasły/anul.): {stats.get('status_to_Były klient', 0)}")
+    print(f"  Status -> 'Trial SoundYou'             : {stats.get('status_to_Trial SoundYou', 0)}")
     if stats.get("status_to_Rozmowa / Demo"):
         print(f"  Awans do 'Rozmowa / Demo'              : {stats.get('status_to_Rozmowa / Demo', 0)}")
     print(f"  Oznaczone wypisania (marketing_opt_out): {stats.get('people_marked_unsubscribed', 0)}")

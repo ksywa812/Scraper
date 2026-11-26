@@ -46,12 +46,15 @@
 
 - **Atrybuty na `Companies`:**
   - `Branża SoundYou` (`soundyou_industry`, `select`, `is_multiselect: true`, 12 opcji)
-  - `Status leada` (`lead_status`, `status`: `Nowy` → `Gotowy do kampanii` → `Wysłano kampanię` → `Zainteresowany` → `Rozmowa / Demo` → `Trial SoundYou` → `Klient` / `Odrzucony / DNC`)
+  - `Status leada` (`lead_status`, `status`: `Nowy` → `Gotowy do kampanii` → `Wysłano kampanię` → `Zainteresowany` → `Rozmowa / Demo` → `Trial SoundYou` → `Klient` ↔ `Były klient` / `Odrzucony / DNC`)
+  - `Plan SoundYou` (`soundyou_plan`, `text`, np. `Trial`, `Standard`, `Business`, `Pro`)
+  - `Subskrypcja do` (`soundyou_valid_until`, `date`, `YYYY-MM-DD` z `profiles.valid_until`)
   - `Partia importu` (`lead_batch`, `text`, np. `2026-11-25 | kawiarnia-wroclaw` lub `SoundYou App (Supabase)`)
   - 6 pól podsumowujących kampanie Resend (`resend_last_sent_at`, `resend_last_campaign`, `resend_last_delivery_status`, `resend_any_opened`, `resend_any_clicked`, `resend_sends_count`) — dostępne identycznie na `People` i `Companies`.
-  - Osobne kolumny kontaktowe/social we wszystkich 18 widokach tabelarycznych (`Companies` i `People`): **Nazwa firmy**, **Strona WWW** (`domains`), **Instagram** (`instagram`), **Facebook** (`facebook`), **Branża SoundYou**, **Status leada**, **Partia importu**.
+  - Osobne kolumny kontaktowe/social we wszystkich widokach tabelarycznych (`Companies` i `People`): **Nazwa firmy**, **Strona WWW** (`domains`), **Instagram** (`instagram`), **Facebook** (`facebook`), **Branża SoundYou**, **Status leada**, **Plan SoundYou**, **Subskrypcja do**, **Partia importu**.
 - **Widoki w Attio:**
-  - 1 widok Kanban: `Pipeline — Status leada (Kanban)`
+  - 1 widok Kanban: `Pipeline — Status leada (Kanban)` (z kolumną `Były klient` oraz polami `Plan SoundYou` i `Subskrypcja do` na kartach)
+  - 1 widok kliencki: `Klienci SoundYou (Obecni, Byli i Trial)` (filtruje `Klient`, `Były klient`, `Trial SoundYou`, sortuje po statusie i dacie ważności subskrypcji)
   - 8 widoków branżowych na `Companies` (`Branża — SPA & Wellness`, `Kobido & Masaż`, `Beauty / Salon Urody`, `Hotele i Pensjonaty`, `Restauracje i Kawiarnie`, `Fitness / Joga / Pilates`, `Fryzjer / Barber`, `Gabinety / Sklepy / Inne`)
   - 6 widoków follow-up Resend (`People` + `Companies`: kliknięcia, otwarcia bez kliknięcia, odbicia).
 

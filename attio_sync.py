@@ -76,11 +76,17 @@ LEAD_STATUS_OPTIONS: tuple[str, ...] = (
     "Rozmowa / Demo",
     "Trial SoundYou",
     "Klient",
+    "Były klient",
     "Odrzucony / DNC",
 )
 
 LEAD_BATCH_SLUG = "lead_batch"
 LEAD_BATCH_TITLE = "Partia importu"
+
+SOUNDYOU_PLAN_SLUG = "soundyou_plan"
+SOUNDYOU_PLAN_TITLE = "Plan SoundYou"
+SOUNDYOU_VALID_UNTIL_SLUG = "soundyou_valid_until"
+SOUNDYOU_VALID_UNTIL_TITLE = "Subskrypcja do"
 
 SOUNDYOU_INDUSTRIES: tuple[str, ...] = (
     "SPA & Wellness",

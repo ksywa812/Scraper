@@ -69,6 +69,7 @@ EXCLUDED_CAMPAIGN_STATUSES = frozenset({
     "Rozmowa / Demo",
     "Trial SoundYou",
     "Klient",
+    "Były klient",
     "Odrzucony / DNC",
 })
 
