@@ -228,6 +228,7 @@ INDUSTRY_EN_PL_MAP: dict[str, tuple[str, ...]] = {
     "klub fitness": ("Fitness / Siłownia",),
     # 8. Joga / Pilates / Medytacja
     "joga": ("Joga / Pilates / Medytacja",),
+    "studio jogi": ("Joga / Pilates / Medytacja",),
     "yoga": ("Joga / Pilates / Medytacja",),
     "yoga studio": ("Joga / Pilates / Medytacja",),
     "pilates": ("Joga / Pilates / Medytacja",),
