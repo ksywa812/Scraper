@@ -602,6 +602,12 @@ def main() -> None:
                         help="Ścieżka do szablonu HTML (tryb campaign), np. data/templates/outreach_ideamusic.html")
     parser.add_argument("--skip-verify", action="store_true",
                         help="Pomiń weryfikację emaili przez UserCheck API")
+    parser.add_argument("--from-attio", action="store_true",
+                        help="Pobierz odbiorców bezpośrednio z Attio CRM (zamiast z pliku CSV)")
+    parser.add_argument("--industry", action="append", default=[],
+                        help="Filtr branży SoundYou przy --from-attio (np. 'Kawiarnie, Restauracje')")
+    parser.add_argument("--cooldown-days", type=int, default=30,
+                        help="Minimalna liczba dni od ostatniej wysyłki Resend przy --from-attio (domyślnie: 30)")
     args = parser.parse_args()
 
     validate_config()
@@ -626,13 +632,28 @@ def main() -> None:
         print(f"\n  Łącznie w sent_log: {len(log)} adresów.")
         return
 
-    csv_path: Path = args.csv if args.csv else find_latest_csv()
-    if not csv_path.exists():
-        sys.exit(f"[ERROR] Plik nie istnieje: {csv_path}")
+    if args.from_attio:
+        from attio_resend_export import select_campaign_recipients_from_attio
+        from attio_sync import AttioClient, resolve_attio_token
+        attio_token = resolve_attio_token(allow_prompt=True)
+        if not attio_token:
+            sys.exit("[ERROR] Brak ATTIO_API_KEY w .env (wymagany dla --from-attio).")
+        print("Źródło:     Attio CRM (filtrowanie branż, DNC, Trial/Klient i cooldown)")
+        contacts, meta = select_campaign_recipients_from_attio(
+            AttioClient(attio_token),
+            industries=args.industry or None,
+            cooldown_days=args.cooldown_days,
+        )
+        print(f"  Zakwalifikowano z Attio: {len(contacts)} kontaktów ({meta['stats'].get('selected_companies', 0)} firm)")
+        csv_path = None
+    else:
+        csv_path = args.csv if args.csv else find_latest_csv()
+        if not csv_path.exists():
+            sys.exit(f"[ERROR] Plik nie istnieje: {csv_path}")
 
-    print(f"CSV:        {csv_path}")
+        print(f"CSV:        {csv_path}")
 
-    contacts = load_contacts(csv_path)
+        contacts = load_contacts(csv_path)
 
     if not contacts:
         print("\nBrak kontaktów do przetworzenia.")
@@ -665,20 +686,20 @@ def main() -> None:
 
         html_template = template_path.read_text(encoding="utf-8")
 
-        # Dodaj pole city z CSV jeśli dostępne
-        try:
-            df = pd.read_csv(csv_path, dtype=str)
-            city_col = "Miasto" if "Miasto" in df.columns else None
-            for c in contacts:
-                if city_col:
-                    # dopasuj po emailu — uproszczone (pierwsza firma z tym mailem)
-                    match = df[df.isin([c["email"]]).any(axis=1)]
-                    c["city"] = str(match.iloc[0][city_col]).strip() if not match.empty else ""
-                else:
-                    c["city"] = ""
-        except Exception:
-            for c in contacts:
-                c["city"] = ""
+        # Dodaj pole city z CSV jeśli dostępne (dla --from-attio miasto jest już ustawione)
+        if csv_path is not None:
+            try:
+                df = pd.read_csv(csv_path, dtype=str)
+                city_col = "Miasto" if "Miasto" in df.columns else None
+                for c in contacts:
+                    if city_col:
+                        match = df[df.isin([c["email"]]).any(axis=1)]
+                        c["city"] = str(match.iloc[0][city_col]).strip() if not match.empty else ""
+                    else:
+                        c["city"] = ""
+            except Exception:
+                for c in contacts:
+                    c.setdefault("city", "")
 
         if USERCHECK_API_KEY and not args.skip_verify:
             contacts = filter_verified_contacts(contacts)
