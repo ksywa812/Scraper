@@ -96,11 +96,14 @@ def mark_emails_sent(emails: list[str], subject: str, log: dict) -> None:
 # ── Pomocnicze ────────────────────────────────────────────────────────────────
 
 
+def _has_audience_id(aud_id: str | None = None) -> bool:
+    val = (aud_id if aud_id is not None else RESEND_AUDIENCE_ID or "").strip()
+    return bool(val) and val not in ("aud_YOUR_AUDIENCE_ID_HERE", "your_resend_audience_id_here")
+
+
 def validate_config() -> None:
-    if not RESEND_API_KEY or RESEND_API_KEY == "re_YOUR_API_KEY_HERE":
+    if not RESEND_API_KEY or RESEND_API_KEY in ("re_YOUR_API_KEY_HERE", "your_resend_api_key_here"):
         sys.exit("[ERROR] Brak RESEND_API_KEY w .env — uzupełnij klucz API z panelu Resend.")
-    if not RESEND_AUDIENCE_ID or RESEND_AUDIENCE_ID == "aud_YOUR_AUDIENCE_ID_HERE":
-        sys.exit("[ERROR] Brak RESEND_AUDIENCE_ID w .env — skopiuj ID Audience z URL panelu Resend.")
 
 
 def find_latest_csv() -> Path:
@@ -299,17 +302,18 @@ def filter_verified_contacts(contacts: list[dict]) -> list[dict]:
 # ── Resend API ────────────────────────────────────────────────────────────────
 
 
-def fetch_existing_emails(audience_id: str) -> set[str]:
+def fetch_existing_emails(audience_id: str = "") -> set[str]:
     """
-    Pobiera wszystkie emaile już istniejące w Resend Audience.
+    Pobiera wszystkie emaile już istniejące w Resend Contacts (globalny `/contacts`
+    lub `/audiences/{audience_id}/contacts`, jeśli podano `audience_id`).
     Obsługuje paginację (cursor-based).
     """
-    url = f"{API_BASE}/audiences/{audience_id}/contacts"
+    url = f"{API_BASE}/audiences/{audience_id}/contacts" if _has_audience_id(audience_id) else f"{API_BASE}/contacts"
     headers = {"Authorization": f"Bearer {RESEND_API_KEY}"}
     existing: set[str] = set()
     params: dict = {}
 
-    print("  Pobieram istniejące kontakty z Resend Audience…", flush=True)
+    print("  Pobieram istniejące kontakty z Resend…", flush=True)
     page = 0
     while True:
         try:
@@ -423,7 +427,7 @@ def _post_contact(contact: dict, dry_run: bool) -> str:
     if dry_run:
         return "ok"
 
-    url = f"{API_BASE}/audiences/{RESEND_AUDIENCE_ID}/contacts"
+    url = f"{API_BASE}/audiences/{RESEND_AUDIENCE_ID}/contacts" if _has_audience_id() else f"{API_BASE}/contacts"
     headers = {
         "Authorization": f"Bearer {RESEND_API_KEY}",
         "Content-Type": "application/json",

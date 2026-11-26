@@ -41,12 +41,17 @@ class FakeResendClient:
     def __init__(self, *, emails=None, contacts=None):
         self._emails = list(emails or [])
         self._contacts = list(contacts or [])
+        self.last_audience_id: str | None = None
 
     def list_recent_emails(self, max_emails: int = 1000):
         return self._emails[:max_emails]
 
-    def list_audience_contacts(self, audience_id: str):
+    def list_contacts(self, audience_id: str = ""):
+        self.last_audience_id = audience_id
         return list(self._contacts)
+
+    def list_audience_contacts(self, audience_id: str):
+        return self.list_contacts(audience_id)
 
 
 class TestResendAttioFeedbackSync:
@@ -190,3 +195,67 @@ class TestResendAttioFeedbackSync:
             "comp-click": "Zainteresowany",
             "comp-unsub": "Odrzucony / DNC",
         }
+
+    def test_fetches_global_resend_contacts_without_audience_id_and_protects_byly_klient(self):
+        attio = FakeAttioForResend(
+            people=[
+                {
+                    "id": {"record_id": "pers-global"},
+                    "values": {
+                        "email_addresses": [{"email_address": "kontakt@salon-global.pl"}],
+                        "company": [{"target_record_id": "comp-global"}],
+                        "resend_unsubscribed": [{"value": False}],
+                    },
+                },
+                {
+                    "id": {"record_id": "pers-former"},
+                    "values": {
+                        "email_addresses": [{"email_address": "dawny@klient.pl"}],
+                        "company": [{"target_record_id": "comp-former"}],
+                        "resend_unsubscribed": [{"value": False}],
+                    },
+                },
+            ],
+            companies=[
+                {
+                    "id": {"record_id": "comp-global"},
+                    "values": {
+                        "name": [{"value": "Salon Global"}],
+                        "lead_status": [{"status": {"title": "Wysłano kampanię"}}],
+                    },
+                },
+                {
+                    "id": {"record_id": "comp-former"},
+                    "values": {
+                        "name": [{"value": "Dawny Klient SPA"}],
+                        "lead_status": [{"status": {"title": "Były klient"}}],
+                    },
+                },
+            ],
+            sends=[],
+        )
+        resend = FakeResendClient(
+            emails=[
+                {
+                    "id": "em_former_1",
+                    "to": ["dawny@klient.pl"],
+                    "subject": "Winback",
+                    "created_at": "2026-11-26T10:00:00Z",
+                    "last_event": "clicked",
+                }
+            ],
+            contacts=[
+                {"email": "kontakt@salon-global.pl", "unsubscribed": True},
+                {"email": "dawny@klient.pl", "unsubscribed": True},
+            ],
+        )
+
+        # audience_id="" -> używa globalnego GET /contacts bez RESEND_AUDIENCE_ID!
+        report = rmod.sync_resend_feedback_to_attio(attio, resend, audience_id="", dry_run=False)
+        assert resend.last_audience_id == ""
+        assert report["stats"]["resend_contacts_fetched"] == 2
+        assert report["stats"]["marked_unsubscribed_people"] == 2
+
+        transitions = {t["company_id"]: t["to"] for t in report["status_transitions"]}
+        # comp-global przechodzi na Odrzucony / DNC, natomiast 'Były klient' jest chroniony!
+        assert transitions == {"comp-global": "Odrzucony / DNC"}

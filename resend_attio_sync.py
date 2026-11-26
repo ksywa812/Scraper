@@ -145,17 +145,30 @@ class ResendClient:
                 break
         return items
 
-    def list_audience_contacts(self, audience_id: str) -> list[dict[str, Any]]:
-        """Pobiera wszystkie kontakty z danej Resend Audience (wraz z flagą `unsubscribed`)."""
-        if not audience_id:
-            return []
+    def list_contacts(self, audience_id: str = "") -> list[dict[str, Any]]:
+        """Pobiera kontakty z Resend wraz z flagą `unsubscribed`.
+
+        Gdy `audience_id` jest puste (nowy model Resend Contacts bez Audiences),
+        odpytuje globalny endpoint `GET /contacts`. Gdy podano `audience_id`,
+        odpytuje `GET /audiences/{audience_id}/contacts`.
+        """
+        clean_aud = (audience_id or "").strip()
+        if clean_aud in ("your_resend_audience_id_here", "aud_YOUR_AUDIENCE_ID_HERE"):
+            clean_aud = ""
+        endpoint = f"/audiences/{clean_aud}/contacts" if clean_aud else "/contacts"
+
         contacts: list[dict[str, Any]] = []
         after_cursor: str | None = None
         while True:
             params: dict[str, Any] = {"limit": 100}
             if after_cursor:
                 params["after"] = after_cursor
-            payload = self.get(f"/audiences/{audience_id}/contacts", params=params)
+            try:
+                payload = self.get(endpoint, params=params)
+            except ResendAPIError as err:
+                # Np. klucz send-only bez uprawnień do odczytu kontaktów — kontynuuj z GET /emails
+                logger.warning("Pominięto odczyt %s (%s)", endpoint, err)
+                break
             page = payload.get("data", []) if isinstance(payload, dict) else []
             if not page:
                 break
@@ -165,6 +178,10 @@ class ResendClient:
             if not has_more or not after_cursor:
                 break
         return contacts
+
+    def list_audience_contacts(self, audience_id: str) -> list[dict[str, Any]]:
+        """Alias wsteczny dla `list_contacts(audience_id)`."""
+        return self.list_contacts(audience_id)
 
 
 # ─── Mapowanie zdarzeń Resend i agregacja ───────────────────────────────────
@@ -433,13 +450,15 @@ def sync_resend_feedback_to_attio(
     sends_by_natural = state["sends_by_natural"]
 
     unsubscribed_emails: set[str] = set()
+    fetch_contacts_fn = getattr(resend, "list_contacts", None) or resend.list_audience_contacts
+    res_contacts = fetch_contacts_fn(audience_id)
+    stats["resend_contacts_fetched"] = len(res_contacts)
     if audience_id:
-        aud_contacts = resend.list_audience_contacts(audience_id)
-        stats["resend_audience_contacts_fetched"] = len(aud_contacts)
-        for c in aud_contacts:
-            em = (c.get("email") or "").strip().lower()
-            if em and bool(c.get("unsubscribed")):
-                unsubscribed_emails.add(em)
+        stats["resend_audience_contacts_fetched"] = len(res_contacts)
+    for c in res_contacts:
+        em = (c.get("email") or "").strip().lower()
+        if em and bool(c.get("unsubscribed")):
+            unsubscribed_emails.add(em)
 
     recent_emails = resend.list_recent_emails(max_emails=max_emails)
     stats["resend_emails_fetched"] = len(recent_emails)
