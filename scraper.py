@@ -75,10 +75,10 @@ def setup_run_logging(output_path, logs_dir="logs"):
 
 # List of User-Agents for rotation to avoid blocking
 USER_AGENTS = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Safari/605.1.15',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:90.0) Gecko/20100101 Firefox/90.0',
-    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36'
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
 ]
 
 def get_random_user_agent():
@@ -168,34 +168,51 @@ def is_catalog_url(url):
     lower = url.lower()
     return any(d in lower for d in [
         "booksy.com",
+        "booksy.net",
         "firmy.net",
         "oferteo.pl",
         "cylex-polska.pl",
         "fresha.com",
+        "freshastatus.com",
         "fixly.pl",
         "panoramafirm.pl",
         "pkt.pl",
         "biznesfinder.pl",
         "znanylekarz.pl",
         "moment.pl",
+        "aleo.com",
+        "treatwell.",
+        "versum.com",
         "itunes.apple.com",
         "apps.apple.com",
         "play.google.com",
         "apple.com/app",
+        "maps.google.",
+        "goo.gl/maps",
+        "maps.app.goo.gl",
     ])
+
+
+_EXTERNAL_PROFILE_SKIP_DEFAULTS = (
+    "freshastatus.com", "fresha.com", "booksy.com", "booksy.net",
+    "cookiebot.com", "onetrust.com", "trustpilot.com", "appsflyer.com",
+    "cloudflare.com", "itunes.apple.com", "apps.apple.com", "play.google.com",
+    "apple.com/app", "google.com/maps", "maps.google.", "doubleclick.net",
+    "googletagmanager.com", "googleapis.com", "gstatic.com", "onelink.me",
+)
 
 
 def extract_external_website_from_profile(profile_url, session=None, skip_domains=None):
     if not profile_url:
         return ""
     session = session or create_session()
-    skip_domains = skip_domains or []
+    merged_skip = list(_EXTERNAL_PROFILE_SKIP_DEFAULTS) + list(skip_domains or [])
 
     def is_valid_external(url):
         if not url or not url.startswith('http'):
             return False
         lower = url.lower()
-        return not any(sd in lower for sd in skip_domains)
+        return not any(sd in lower for sd in merged_skip)
 
     try:
         resp = session.get(profile_url, headers={'User-Agent': get_random_user_agent()}, timeout=15)
@@ -681,13 +698,16 @@ def get_booksy_category_slug(query, session=None):
             "spa": "masaz",
             "wellness": "masaz",
             "fizjoterapia": "fizjoterapia",
-            "joga": "joga",
-            "uroda": "uroda",
+            "joga": "trening-i-dieta",
+            "fitness": "trening-i-dieta",
+            "uroda": "kosmetyczka",
             "fryzjer": "fryzjerstwo",
-            "hotel": "masaz",      # hotels aren't on Booksy; fallback to spa/massage
+            "hotel": None,         # hotels aren't on Booksy
             "restaurant": None,    # restaurants aren't on Booksy
+            "kawiarnia": None,     # cafes aren't on Booksy
+            "sklep": None,         # retail shops aren't on Booksy
         }
-        return booksy_category_map.get(mapped, mapped)
+        return booksy_category_map.get(mapped)
 
     # Fallback: try slugified query
     slug = slugify(query_lower)
@@ -703,6 +723,37 @@ def get_booksy_category_slug(query, session=None):
         pass
 
     return None
+
+
+def get_booksy_category_slugs(query, session=None):
+    """Zwraca listę kategorii Booksy odpowiadających branży (wiele podkategorii = więcej leadów)."""
+    query_lower = (query or "").lower()
+    if any(k in query_lower for k in ("kobido", "masaz", "masaż", "massage")):
+        return ["masaz"]
+    if any(k in query_lower for k in ("barber", "barbershop")):
+        return ["barber-shop", "fryzjerstwo"]
+    if any(k in query_lower for k in ("tatuaż", "tatuaz", "tattoo", "piercing")):
+        return ["tatuaz-i-piercing"]
+
+    mapped = map_query_to_category(query_lower)
+    multi_map = {
+        "spa": ["masaz", "spa"],
+        "wellness": ["masaz", "spa"],
+        "uroda": ["kosmetyczka", "paznokcie", "brwi-i-rzesy", "medycyna-estetyczna"],
+        "fryzjer": ["fryzjerstwo", "barber-shop"],
+        "fizjoterapia": ["fizjoterapia"],
+        "joga": ["trening-i-dieta"],
+        "fitness": ["trening-i-dieta"],
+        "hotel": [],
+        "restaurant": [],
+        "kawiarnia": [],
+        "sklep": [],
+    }
+    if mapped in multi_map:
+        return list(multi_map[mapped])
+
+    single = get_booksy_category_slug(query, session=session)
+    return [single] if single else []
 
 
 BOOKSY_CITY_SLUG_OVERRIDES = {
@@ -766,22 +817,60 @@ def get_booksy_city_slug(category_slug, location, session=None):
     return None
 
 
+def _is_booksy_noise_name(text):
+    """Wykrywa fałszywe nazwy z kart Booksy (np. sama ocena '5.0', '4.9', 'Nowy', 'Umów')."""
+    if not text:
+        return True
+    s = re.sub(r"\s+", " ", text).strip()
+    if len(s) < 2:
+        return True
+    # Sama ocena gwiazdkowa typu "5.0", "4,9", "5.0 (123)" lub liczby/symbole
+    if re.fullmatch(r"[\d.,\s()★☆⭐•·+\-/%]+", s):
+        return True
+    low = s.lower()
+    if low in {
+        "nowy", "new", "promowany", "polecany", "zobacz", "umów", "umow",
+        "rezerwuj", "więcej", "wiecej", "karty podarunkowe booksy",
+        "karty podarunkowe", "pokaż więcej", "pokaz wiecej",
+    }:
+        return True
+    return False
+
+
+def _humanize_booksy_slug_from_url(url):
+    """Wyciąga czytelną nazwę salonu z URL Booksy (`/pl-pl/<id>_<salon-slug>_<cat>_<city_id>_<city>`)."""
+    if not url:
+        return ""
+    path = urlparse(url).path or ""
+    m = re.search(r"/pl-pl/\d+_([^_/]+)_", path, re.IGNORECASE)
+    if not m:
+        return ""
+    slug = m.group(1).strip("-")
+    if not slug:
+        return ""
+    words = [w for w in slug.split("-") if w]
+    if not words:
+        return ""
+    upper_words = {"spa", "vip", "med", "fit", "pro", "art", "bio", "eco", "ems"}
+    return " ".join(w.upper() if w.lower() in upper_words else w.capitalize() for w in words)
+
+
 def clean_booksy_name(text):
     if not text:
         return ""
-    text = text.replace("Promowany", "").strip()
+    text = text.replace("Promowany", "").replace("Karty podarunkowe Booksy", "").strip()
     if " - " in text:
         text = text.split(" - ")[0]
     text = re.sub(r"\b\d+(?:\.\d+)?\s*km\b", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"\b\d+,\d+\b", "", text)
+    text = re.sub(r"\b\d+[.,]\d+\b", "", text)
     text = re.sub(r"\b\d+\s*opin\w*\b", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
 
 def extract_booksy_profile_data(profile_url, session=None):
-    """Extract website, social links (Facebook/Instagram), email, and phone from a Booksy profile via __NUXT__ data."""
-    result = {'website': '', 'facebook': '', 'instagram': '', 'emails': [], 'phone': ''}
+    """Extract name, website, social links (Facebook/Instagram), email, phone, and address from a Booksy profile."""
+    result = {'name': '', 'address': '', 'website': '', 'facebook': '', 'instagram': '', 'emails': [], 'phone': ''}
     if not profile_url:
         return result
     session = session or create_session()
@@ -795,86 +884,141 @@ def extract_booksy_profile_data(profile_url, session=None):
         soup = BeautifulSoup(resp.text, 'html.parser')
 
         skip_domains = [
-            'booksy.com', 'facebook.com', 'instagram.com', 'youtube.com',
+            'booksy.com', 'booksy.net', 'facebook.com', 'instagram.com', 'youtube.com',
             'tiktok.com', 'linkedin.com', 'google.', 'maps.google.',
             'itunes.apple.com', 'apps.apple.com', 'play.google.com',
             'apple.com/app', 'microsoft.com', 'apps.microsoft.com',
             'appsflyer.com', 'doubleclick.net', 'cloudfront.net',
             'googleapis.com', 'googletagmanager.com', 'feroot.com',
-            'onelink.me', 'apple-mapkit.com', 'app.link',
+            'onelink.me', 'apple-mapkit.com', 'app.link', 'freshastatus.com',
+            'cookiebot.com', 'onetrust.com', 'cloudflare.com', 'sentry.io',
         ]
 
         def is_valid_external(url):
-            if not url or not url.startswith('http'):
+            if not url or not isinstance(url, str) or not url.startswith('http'):
                 return False
             lower = url.lower()
             return not any(sd in lower for sd in skip_domains)
 
-        # PRIMARY: Parse window.__NUXT__ — Booksy embeds all business data here
-        for script in soup.find_all('script'):
-            text = script.get_text(' ', strip=True)
-            if 'window.__NUXT__' not in text:
-                continue
-            decoded = text.replace('\\u002F', '/')
+        def _collect_emails_from_text(blob):
+            if not blob:
+                return
+            for e in EMAIL_RE.findall(blob):
+                if is_valid_email(e) and e.lower() not in _PLATFORM_EMAILS:
+                    if e not in result['emails']:
+                        result['emails'].append(e)
 
-            # Extract website (lub link social media jeśli podano go jako stronę WWW)
-            website_match = re.search(r'website:"(https?://[^"]+)"', decoded)
-            if website_match:
-                w = website_match.group(1)
-                if is_valid_external(w):
-                    result['website'] = w
-                else:
-                    soc = extract_social_links(w)
-                    result['facebook'] = result['facebook'] or soc['facebook']
-                    result['instagram'] = result['instagram'] or soc['instagram']
+        # 0. Nazwa z <h1> (najbardziej wiarygodna na stronie profilu Booksy)
+        h1 = soup.find('h1')
+        if h1:
+            h1_text = clean_booksy_name(h1.get_text(' ', strip=True))
+            if h1_text and not _is_booksy_noise_name(h1_text):
+                result['name'] = h1_text
+
+        # 1. JSON-LD (LocalBusiness / BeautySalon / HealthAndBeautyBusiness — stabilny także w Nuxt 3)
+        for script in soup.find_all('script', type='application/ld+json'):
+            try:
+                data = json.loads(script.get_text(strip=True))
+                items = data if isinstance(data, list) else [data]
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    ld_name = item.get('name')
+                    if isinstance(ld_name, str) and not result['name']:
+                        cn = clean_booksy_name(ld_name)
+                        if cn and not _is_booksy_noise_name(cn):
+                            result['name'] = cn
+                    ld_tel = item.get('telephone')
+                    if isinstance(ld_tel, str) and ld_tel.strip() and not result['phone']:
+                        result['phone'] = ld_tel.strip()
+                    ld_email = item.get('email')
+                    if isinstance(ld_email, str):
+                        _collect_emails_from_text(ld_email)
+                    ld_addr = item.get('address')
+                    if isinstance(ld_addr, dict) and not result['address']:
+                        parts = [
+                            str(ld_addr.get('streetAddress') or '').strip(),
+                            str(ld_addr.get('postalCode') or '').strip(),
+                            str(ld_addr.get('addressLocality') or '').strip(),
+                        ]
+                        addr_str = ', '.join(p for p in parts if p)
+                        if addr_str:
+                            result['address'] = addr_str
+                    for field in ('url', 'sameAs'):
+                        val = item.get(field)
+                        urls = val if isinstance(val, list) else ([val] if isinstance(val, str) else [])
+                        for u in urls:
+                            if not isinstance(u, str):
+                                continue
+                            soc = extract_social_links(u)
+                            result['facebook'] = result['facebook'] or soc['facebook']
+                            result['instagram'] = result['instagram'] or soc['instagram']
+                            if not result['website'] and is_valid_external(u):
+                                result['website'] = u
+            except Exception:
+                continue
+
+        # 2. Parse window.__NUXT__ (Nuxt 2) oraz <script id="__NUXT_DATA__"> (Nuxt 3 hydration JSON)
+        for script in soup.find_all('script'):
+            script_id = (script.get('id') or '').strip()
+            text = script.get_text(' ', strip=True)
+            if not text:
+                continue
+            is_nuxt2 = 'window.__NUXT__' in text
+            is_nuxt3 = script_id == '__NUXT_DATA__' or '"website"' in text
+            if not (is_nuxt2 or is_nuxt3):
+                continue
+            decoded = text.replace('\\u002F', '/').replace('\\/', '/')
+
+            # Extract website (Nuxt 2: website:"...", Nuxt 3 JSON: "website":"...")
+            if not result['website']:
+                for pat in (r'website:"(https?://[^"]+)"', r'"website"\s*:\s*"(https?://[^"]+)"'):
+                    m_web = re.search(pat, decoded)
+                    if m_web:
+                        w = m_web.group(1)
+                        if is_valid_external(w):
+                            result['website'] = w
+                            break
+                        else:
+                            soc = extract_social_links(w)
+                            result['facebook'] = result['facebook'] or soc['facebook']
+                            result['instagram'] = result['instagram'] or soc['instagram']
 
             soc_all = extract_social_links(decoded)
             result['facebook'] = result['facebook'] or soc_all['facebook']
             result['instagram'] = result['instagram'] or soc_all['instagram']
 
-            # Extract phone
-            phone_match = re.search(r'phone:"([^"]+)"', decoded)
-            if phone_match:
-                result['phone'] = phone_match.group(1)
-
-            # Extract emails — pomiń e-maile booksy.com i inne platformowe
-            all_emails = EMAIL_RE.findall(decoded)
-            result['emails'] = list(dict.fromkeys(
-                e for e in all_emails
-                if is_valid_email(e) and e.lower() not in _PLATFORM_EMAILS
-            ))
-            break  # Only process first __NUXT__ script
-
-        # FALLBACK: Try explicit website links in HTML if __NUXT__ didn't yield website
-        if not result['website']:
-            for a in soup.find_all('a', href=True):
-                text = " ".join(a.stripped_strings).lower()
-                href = a.get('href')
-                if any(k in text for k in ['www', 'strona', 'website', 'witryna', 'odwiedz', 'odwiedź']):
-                    if is_valid_external(href):
-                        result['website'] = href
+            if not result['phone']:
+                for pat in (r'phone:"([^"]+)"', r'"phone"\s*:\s*"([^"]+)"'):
+                    m_ph = re.search(pat, decoded)
+                    if m_ph and len(re.sub(r'\D', '', m_ph.group(1))) >= 9:
+                        result['phone'] = m_ph.group(1)
                         break
 
-        # FALLBACK: JSON-LD
-        if not result['website']:
-            for script in soup.find_all('script', type='application/ld+json'):
-                try:
-                    data = json.loads(script.get_text(strip=True))
-                    items = data if isinstance(data, list) else [data]
-                    for item in items:
-                        if isinstance(item, dict):
-                            url = item.get('url') or item.get('sameAs')
-                            if isinstance(url, list):
-                                for u in url:
-                                    if is_valid_external(u):
-                                        result['website'] = u
-                                        break
-                            elif is_valid_external(url):
-                                result['website'] = url
-                            if result['website']:
-                                break
-                except Exception:
-                    continue
+            _collect_emails_from_text(decoded)
+            if is_nuxt2:
+                break
+
+        # 3. HTML fallbacks: mailto:, tel:, social links i linki do strony WWW
+        for a in soup.find_all('a', href=True):
+            href = (a.get('href') or '').strip()
+            low_href = href.lower()
+            if low_href.startswith('mailto:'):
+                _collect_emails_from_text(href[7:].split('?')[0])
+                continue
+            if low_href.startswith('tel:') and not result['phone']:
+                cand_ph = href[4:].strip()
+                if len(re.sub(r'\D', '', cand_ph)) >= 9:
+                    result['phone'] = cand_ph
+                continue
+            soc = extract_social_links(href)
+            result['facebook'] = result['facebook'] or soc['facebook']
+            result['instagram'] = result['instagram'] or soc['instagram']
+            if not result['website']:
+                anchor_text = " ".join(a.stripped_strings).lower()
+                if any(k in anchor_text for k in ['www', 'strona', 'website', 'witryna', 'odwiedz', 'odwiedź']):
+                    if is_valid_external(href):
+                        result['website'] = href
     except Exception:
         pass
     return result
@@ -891,37 +1035,49 @@ def parse_booksy_listings(html, category_slug):
         if not href_pattern.match(href):
             continue
 
-        if href.startswith("http"):
-            full_url = href
-        elif href.startswith("/pl-pl/"):
-            full_url = f"https://booksy.com{href}"
+        clean_href = href.split('#', 1)[0].split('?', 1)[0]
+        if clean_href.startswith("http"):
+            full_url = clean_href
+        elif clean_href.startswith("/pl-pl/"):
+            full_url = f"https://booksy.com{clean_href}"
         else:
-            full_url = f"{BOOKSY_BASE}{href}"
+            full_url = f"{BOOKSY_BASE}{clean_href}"
+
+        entry = entries.setdefault(full_url, {"name": "", "address": "", "profile_url": full_url})
+
+        # Preferuj nagłówek (h2/h3/h4) wewnątrz linku — omija odznaki ocen typu "5.0"
+        heading = a.find(['h2', 'h3', 'h4'])
+        if heading:
+            h_name = clean_booksy_name(" ".join(heading.stripped_strings))
+            if h_name and not _is_booksy_noise_name(h_name):
+                entry["name"] = h_name
+
         text = " ".join(a.stripped_strings)
         if not text:
             continue
-
-        entry = entries.setdefault(full_url, {"name": "", "address": "", "profile_url": full_url})
 
         if "•" in text:
             left, right = text.split("•", 1)
             name = clean_booksy_name(left)
             address = right.replace("Karty podarunkowe Booksy", "").strip()
-            if name and not entry["name"]:
+            if name and not _is_booksy_noise_name(name) and not entry["name"]:
                 entry["name"] = name
             if address and not entry["address"]:
                 entry["address"] = address
         else:
             name = clean_booksy_name(text)
-            if name and not entry["name"]:
+            if name and not _is_booksy_noise_name(name) and not entry["name"]:
                 entry["name"] = name
 
     results = []
     for url, data in entries.items():
-        if not data["name"]:
+        final_name = data["name"]
+        if not final_name or _is_booksy_noise_name(final_name):
+            final_name = _humanize_booksy_slug_from_url(url)
+        if not final_name:
             continue
         results.append({
-            'name': data["name"],
+            'name': final_name,
             'formatted_address': data["address"],
             'formatted_phone_number': "",
             'website': url,
@@ -936,64 +1092,69 @@ def scrape_booksy(query, location, max_pages=3, session=None):
     results = []
     session = session or create_session()
 
-    category_slug = get_booksy_category_slug(query, session=session)
-    if not category_slug:
+    category_slugs = get_booksy_category_slugs(query, session=session)
+    if not category_slugs:
         logger.info("Booksy: no matching category for query '%s'.", query)
         return results
 
-    city_slug = get_booksy_city_slug(category_slug, location, session=session)
-    if not city_slug:
-        logger.info("Booksy: could not resolve city slug for '%s'.", location)
-        return results
-
-    logger.info("Scraping Booksy category '%s' for %s", category_slug, location)
     seen_urls: set = set()
-    for page in range(1, max_pages + 1):
-        page_url = f"{BOOKSY_BASE}/s/{category_slug}/{city_slug}"
-        if page > 1:
-            page_url = f"{page_url}?page={page}"
-
-        try:
-            resp = session.get(page_url, headers={'User-Agent': get_random_user_agent()}, timeout=15)
-            resp.raise_for_status()
-            page_results = parse_booksy_listings(resp.text, category_slug)
-            if not page_results:
-                if page == 1:
-                    logger.info("Booksy: no results found for %s", page_url)
-                break
-            page_urls = {r['profile_url'] for r in page_results}
-            if page > 1 and page_urls.issubset(seen_urls):
-                logger.info("Booksy: page %s returned only already-seen listings — stopping pagination", page)
-                break
-            seen_urls.update(page_urls)
-            results.extend(page_results)
-            logger.info("Booksy: found %s listings on page %s", len(page_results), page)
-            time.sleep(random.uniform(1.0, 2.0))
-        except Exception as e:
-            logger.warning("Booksy: error fetching %s: %s", page_url, e)
-            break
-
-    # Deduplicate by profile_url before deep scraping to avoid hitting the same page multiple times
-    seen_profiles: set = set()
-    unique_results = []
-    for item in results:
-        key = item.get('profile_url') or item.get('website') or ""
-        if key and key in seen_profiles:
+    for category_slug in category_slugs:
+        city_slug = get_booksy_city_slug(category_slug, location, session=session)
+        if not city_slug:
+            logger.info("Booksy: could not resolve city slug for '%s' in category '%s'.", location, category_slug)
             continue
-        if key:
-            seen_profiles.add(key)
-        unique_results.append(item)
-    results = unique_results
 
-    # Deep scrape Booksy profiles to get real external website URLs, emails, and phones
+        logger.info("Scraping Booksy category '%s' for %s", category_slug, location)
+        cat_seen: set = set()
+        for page in range(1, max_pages + 1):
+            page_url = f"{BOOKSY_BASE}/s/{category_slug}/{city_slug}"
+            if page > 1:
+                page_url = f"{page_url}?page={page}"
+
+            try:
+                resp = session.get(page_url, headers={'User-Agent': get_random_user_agent()}, timeout=15)
+                resp.raise_for_status()
+                page_results = parse_booksy_listings(resp.text, category_slug)
+                if not page_results:
+                    if page == 1:
+                        logger.info("Booksy: no results found for %s", page_url)
+                    break
+                page_urls = {r['profile_url'] for r in page_results}
+                if page > 1 and page_urls.issubset(cat_seen):
+                    logger.info("Booksy: page %s returned only already-seen listings — stopping pagination", page)
+                    break
+                cat_seen.update(page_urls)
+                for r in page_results:
+                    if r['profile_url'] not in seen_urls:
+                        seen_urls.add(r['profile_url'])
+                        results.append(r)
+                logger.info("Booksy: found %s listings on page %s (%s)", len(page_results), page, category_slug)
+                time.sleep(random.uniform(0.8, 1.5))
+            except Exception as e:
+                logger.warning("Booksy: error fetching %s: %s", page_url, e)
+                break
+
+    # Deep scrape Booksy profiles to get real external website URLs, socials, emails, and phones
     if results:
-        logger.info("Booksy: deep scraping %s profiles for external websites & emails", len(results))
+        logger.info("Booksy: deep scraping %s profiles for external websites, socials & emails", len(results))
     for idx, item in enumerate(results, start=1):
         profile_url = item.get('profile_url') or item.get('website')
         if not profile_url:
             continue
         logger.info("Booksy: profile %s/%s  %s", idx, len(results), item.get('name', ''))
         profile_data = extract_booksy_profile_data(profile_url, session=session)
+        # Upgrade noisy listing name z <h1>/JSON-LD profilu
+        if profile_data.get('name') and (
+            _is_booksy_noise_name(item.get('name', '')) or len(item.get('name', '')) > 90
+        ):
+            item['name'] = profile_data['name']
+        if profile_data.get('address') and not item.get('formatted_address'):
+            item['formatted_address'] = profile_data['address']
+        # Zachowaj linki Facebook / Instagram z profilu Booksy
+        if profile_data.get('facebook') and not item.get('facebook'):
+            item['facebook'] = profile_data['facebook']
+        if profile_data.get('instagram') and not item.get('instagram'):
+            item['instagram'] = profile_data['instagram']
         # Website — zachowaj profile_url jako fallback jeśli nie ma realnej strony
         if profile_data['website'] and not is_catalog_url(profile_data['website']):
             logger.info("Booksy:   → website: %s", profile_data['website'])
@@ -1008,9 +1169,15 @@ def scrape_booksy(query, location, max_pages=3, session=None):
         # Phone
         if profile_data['phone'] and not item.get('formatted_phone_number'):
             item['formatted_phone_number'] = profile_data['phone']
-        time.sleep(random.uniform(0.5, 1.0))
+        time.sleep(random.uniform(0.4, 0.9))
 
     return results
+
+
+_SPAEDEN_NOISE_RE = re.compile(
+    r"\b(edycja|awards|nagrod\w*|ranking\w*|konkurs\w*|laureaci|zwyci[ęe]zc\w*)\b",
+    re.IGNORECASE,
+)
 
 
 def parse_spaeden_rankings(text):
@@ -1025,8 +1192,10 @@ def parse_spaeden_rankings(text):
     for name, place in numbered + bullets:
         name = re.sub(r"\s+", " ", name).strip()
         place = re.sub(r"\s+", " ", place).strip()
+        if not name or _SPAEDEN_NOISE_RE.search(name):
+            continue
         key = f"{normalize_name(name)}|{normalize_address(place)}"
-        if not name or key in seen:
+        if key in seen:
             continue
         seen.add(key)
         results.append({
@@ -1040,7 +1209,7 @@ def parse_spaeden_rankings(text):
     return results
 
 
-def scrape_spaeden_rankings(session=None):
+def scrape_spaeden_rankings(session=None, location=None):
     results = []
     session = session or create_session()
     try:
@@ -1049,7 +1218,13 @@ def scrape_spaeden_rankings(session=None):
         soup = BeautifulSoup(resp.text, 'html.parser')
         text = soup.get_text("\n")
         results = parse_spaeden_rankings(text)
-        logger.info("SPAeden: extracted %s ranking entries", len(results))
+        if location:
+            loc_norm = strip_accents(location).lower().strip()
+            results = [
+                r for r in results
+                if loc_norm in strip_accents(f"{r.get('formatted_address', '')} {r.get('name', '')}").lower()
+            ]
+        logger.info("SPAeden: extracted %s ranking entries%s", len(results), f" (filtered for {location})" if location else "")
     except Exception as e:
         logger.warning("SPAeden: error fetching rankings: %s", e)
     return results
@@ -1500,6 +1675,7 @@ def scrape_oferteo(query, location, session=None, max_pages=3):
                         logger.info("Oferteo: no profiles found on %s", url)
                     break
 
+                page_added = 0
                 for profile_url in profile_links:
                     if profile_url in seen_profiles:
                         continue
@@ -1510,11 +1686,12 @@ def scrape_oferteo(query, location, session=None, max_pages=3):
                         if keywords and not any(k in text_blob for k in keywords):
                             continue
                         results.append(profile)
+                        page_added += 1
                     if len(seen_profiles) >= max_profiles:
                         break
 
                 logger.info("Oferteo: collected %s profiles from %s", len(results), url)
-                if len(seen_profiles) >= max_profiles:
+                if page_added == 0 or len(seen_profiles) >= max_profiles:
                     break
                 time.sleep(random.uniform(1.0, 2.0))
             except Exception as e:
@@ -2838,7 +3015,8 @@ def get_place_details(place_id, session=None):
         url = 'https://maps.googleapis.com/maps/api/place/details/json'
         params = {
             'place_id': place_id,
-            'fields': 'name,formatted_address,formatted_phone_number,website', # Requested fields
+            'fields': 'name,formatted_address,formatted_phone_number,website,business_status',
+            'language': 'pl',
             'key': API_KEY
         }
         resp = session.get(url, params=params, timeout=15)
@@ -2854,27 +3032,108 @@ def get_place_details(place_id, session=None):
         logger.error("Error fetching details for place %s: %s", place_id, e)
         return {}
 
-def enrich_with_google_places(results, location, session=None, cache_conn=None):
-    """For records missing phone (and optionally website), look them up via
-    Google Places findplacefromtext → place/details and fill in the gaps.
 
-    Uses the cheaper findplacefromtext endpoint (1 call per business) instead
-    of running a full textsearch, so API quota is only spent where needed.
+_GOOGLE_MATCH_STOPWORDS = frozenset({
+    "spa", "day", "wellness", "salon", "studio", "gabinet", "centrum", "instytut",
+    "klinika", "masaz", "masazu", "masaze", "massage", "urody", "uroda", "beauty",
+    "kosmetyczny", "kosmetologia", "fryzjer", "fryzjerski", "barber", "hotel",
+    "resort", "pensjonat", "restauracja", "restaurant", "kawiarnia", "cafe",
+    "bistro", "fitness", "silownia", "gym", "joga", "yoga", "pilates", "sklep",
+    "butik", "fizjoterapia", "rehabilitacja", "stomatologia", "dentysta",
+    "odnowy", "biologicznej", "ciala", "twarzy", "zdrowia", "polska", "poland",
+    "sp", "zoo", "o", "z", "i", "w", "na", "dla", "oraz", "the", "and", "by", "club",
+})
+
+
+def _distinctive_name_tokens(text, location=""):
+    norm = strip_accents(strip_emoji(text or "")).lower()
+    loc_tokens = set(re.findall(r"[a-z0-9]{2,}", strip_accents(location or "").lower()))
+    tokens = re.findall(r"[a-z0-9]{2,}", norm)
+    return {t for t in tokens if t not in _GOOGLE_MATCH_STOPWORDS and t not in loc_tokens and not t.isdigit()}
+
+
+def _is_confident_google_match(source_name, candidate_name, source_address="", candidate_address="", location=""):
+    """Sprawdza, czy wynik Google Places naprawdę odpowiada tej samej firmie (eliminuje fałszywe dopasowania)."""
+    if not source_name or not candidate_name:
+        return False
+    src_norm = strip_accents(strip_emoji(source_name)).lower().strip()
+    cand_norm = strip_accents(strip_emoji(candidate_name)).lower().strip()
+    if not src_norm or not cand_norm:
+        return False
+
+    # Odrzuć oczywisty mismatch miasta, gdy adres kandydata nie zawiera docelowej lokalizacji (ani adresu źródła)
+    if location and candidate_address:
+        loc_norm = strip_accents(location).lower().strip()
+        cand_addr_norm = strip_accents(candidate_address).lower()
+        src_addr_norm = strip_accents(source_address or "").lower()
+        if loc_norm and loc_norm not in cand_addr_norm:
+            # Zezwól tylko, jeśli źródło samo miało inny adres i oba mają wspólny kod pocztowy/token miasta
+            src_pc = re.search(r"\b\d{2}-\d{3}\b", src_addr_norm)
+            cand_pc = re.search(r"\b\d{2}-\d{3}\b", cand_addr_norm)
+            if not (src_pc and cand_pc and src_pc.group(0) == cand_pc.group(0)):
+                return False
+
+    # 1. Dokładne zawieranie się pełnych oczyszczonych nazw (>= 5 znaków)
+    if len(src_norm) >= 5 and (src_norm in cand_norm or cand_norm in src_norm):
+        return True
+
+    # 2. Porównanie tokenów wyróżniających (bez słów branżowych typu "spa", "salon", miasta)
+    src_toks = _distinctive_name_tokens(source_name, location=location)
+    cand_toks = _distinctive_name_tokens(candidate_name, location=location)
+    if not src_toks or not cand_toks:
+        return False
+
+    overlap = src_toks & cand_toks
+    if not overlap:
+        # Pozwól na dopasowanie prefiksowe długiego tokenu marki (np. "enklawa" vs "enklawaspa")
+        prefix_hit = any(
+            (len(a) >= 5 and len(b) >= 5 and (a in b or b in a))
+            for a in src_toks for b in cand_toks
+        )
+        if not prefix_hit:
+            return False
+        return True
+
+    min_len = min(len(src_toks), len(cand_toks))
+    containment = len(overlap) / max(1, min_len)
+    # Co najmniej 1 mocny token (>= 4 znaki) i pokrycie >= 50% mniejszego zbioru
+    has_strong_tok = any(len(t) >= 4 for t in overlap)
+    return has_strong_tok and containment >= 0.5
+
+
+def _needs_website_enrichment(record):
+    """Zwraca True, gdy rekord nie ma prawdziwej strony WWW (brak, katalog typu Booksy/Fresha, lub samo FB/IG)."""
+    w = (record.get('website') or '').strip()
+    if not w:
+        return True
+    if is_catalog_url(w):
+        return True
+    wl = w.lower()
+    if any(soc in wl for soc in ('facebook.com', 'fb.com', 'instagram.com')):
+        return True
+    return False
+
+
+def enrich_with_google_places(results, location, session=None, cache_conn=None):
+    """For records missing a real company website (empty, catalog-only, or social-only),
+    look them up via Google Places findplacefromtext → place/details with strict name+city verification.
     """
     if not API_KEY:
         return
 
     session = session or create_session()
-    # Enrich records missing website — website is the gateway to email scraping.
-    # Phone presence is irrelevant: a record can have phone but no website/email.
-    candidates = [r for r in results if not r.get('website')]
+    try:
+        from attio_sync import extract_social_links
+    except ImportError:
+        extract_social_links = lambda *a: {'facebook': '', 'instagram': ''}
+
+    candidates = [r for r in results if _needs_website_enrichment(r)]
     if not candidates:
-        logger.info("Google enrichment: all records already have a website — skipping")
+        logger.info("Google enrichment: all records already have a company website — skipping")
         return
 
-    logger.info("=== Google Places enrichment: %d records missing website (seeking emails) ===", len(candidates))
+    logger.info("=== Google Places enrichment: %d records missing real website (seeking emails) ===", len(candidates))
 
-    # Resolve city GPS coords once (cached) for accurate locationbias
     coords = get_city_coords(location, cache_conn=cache_conn, session=session)
     if coords:
         location_bias = f'circle:30000@{coords[0]},{coords[1]}'
@@ -2884,9 +3143,10 @@ def enrich_with_google_places(results, location, session=None, cache_conn=None):
         logger.warning("Google enrichment: could not resolve coords for '%s', locationbias disabled", location)
 
     enriched = 0
+    rejected_mismatch = 0
     for item in candidates:
         name = item.get('name', '').strip()
-        if not name:
+        if not name or _is_booksy_noise_name(name):
             continue
         query_text = f"{name} {location}"
         try:
@@ -2894,7 +3154,7 @@ def enrich_with_google_places(results, location, session=None, cache_conn=None):
             params = {
                 'input': query_text,
                 'inputtype': 'textquery',
-                'fields': 'place_id,name',
+                'fields': 'place_id,name,formatted_address,business_status',
                 'key': API_KEY,
                 'language': 'pl',
             }
@@ -2907,34 +3167,74 @@ def enrich_with_google_places(results, location, session=None, cache_conn=None):
             if data.get('status') != 'OK' or not data.get('candidates'):
                 continue
 
-            place_id = data['candidates'][0].get('place_id')
+            cand = data['candidates'][0]
+            if cand.get('business_status') == 'CLOSED_PERMANENTLY':
+                continue
+
+            cand_name = cand.get('name', '')
+            cand_addr = cand.get('formatted_address', '')
+            if not _is_confident_google_match(
+                name, cand_name,
+                source_address=item.get('formatted_address', ''),
+                candidate_address=cand_addr,
+                location=location,
+            ):
+                rejected_mismatch += 1
+                logger.debug("Google enrichment: rejected mismatch '%s' != '%s' (%s)", name, cand_name, cand_addr)
+                continue
+
+            place_id = cand.get('place_id')
             if not place_id:
                 continue
 
             details = get_place_details(place_id, session=session)
-            if not details:
+            if not details or details.get('business_status') == 'CLOSED_PERMANENTLY':
                 continue
 
             phone = details.get('formatted_phone_number', '')
             website = details.get('website', '')
 
+            # Jeśli obecna strona to FB/IG, zachowaj ją w dedykowanym polu przed nadpisaniem
+            old_web = (item.get('website') or '').strip()
+            if old_web:
+                soc_old = extract_social_links(old_web)
+                if soc_old['facebook'] and not item.get('facebook'):
+                    item['facebook'] = soc_old['facebook']
+                if soc_old['instagram'] and not item.get('instagram'):
+                    item['instagram'] = soc_old['instagram']
+
+            updated = False
             if phone and not item.get('formatted_phone_number'):
                 item['formatted_phone_number'] = phone
-            if website and not item.get('website'):
-                item['website'] = website
-            if phone or website:
+                updated = True
+            if website and not is_catalog_url(website):
+                soc_new = extract_social_links(website)
+                if soc_new['facebook'] and not item.get('facebook'):
+                    item['facebook'] = soc_new['facebook']
+                if soc_new['instagram'] and not item.get('instagram'):
+                    item['instagram'] = soc_new['instagram']
+                is_new_social_only = any(s in website.lower() for s in ('facebook.com', 'fb.com', 'instagram.com'))
+                if not old_web or is_catalog_url(old_web) or (not is_new_social_only and any(s in old_web.lower() for s in ('facebook.com', 'fb.com', 'instagram.com'))):
+                    item['website'] = website
+                    updated = True
+            if cand_addr and not item.get('formatted_address'):
+                item['formatted_address'] = cand_addr
+            if updated:
                 sources = item.get('sources') or []
                 if 'google' not in sources:
                     item['sources'] = sources + ['google']
                 enriched += 1
                 logger.info("Google enrichment: ✓ %s → phone=%s website=%s", name, phone or '—', website or '—')
 
-            time.sleep(random.uniform(0.3, 0.6))
+            time.sleep(random.uniform(0.2, 0.45))
 
         except Exception as e:
             logger.warning("Google enrichment: error for '%s': %s", name, e)
 
-    logger.info("Google enrichment: filled %d/%d records", enriched, len(candidates))
+    logger.info(
+        "Google enrichment: filled %d/%d records (rejected %d low-confidence matches)",
+        enriched, len(candidates), rejected_mismatch,
+    )
 
 
 def can_fetch_url(url, respect_robots=False):
@@ -3213,10 +3513,16 @@ def annotate_sources(results_list, source_name):
 def merge_results(*lists):
     """Merge multiple result lists into unique records, merging fields and prioritizing Booksy emails.
 
-    Matching key: normalized_name | simple_address | normalized_phone
+    Matching signals:
+    - Exact normalized phone (9 digits), OR
+    - Exact business domain (non-catalog, non-social), OR
+    - Exact Facebook / Instagram URL, OR
+    - Overlapping valid non-platform email, OR
+    - Normalized name with compatible address (same street prefix or one address empty).
+
     Merging rules:
     - Union emails (unique); if a source labelled 'booksy' provides emails, place them first.
-    - Fill empty fields (website, profile_url, phone, address) from other sources when available.
+    - Prefer real business websites over catalog/social URLs; preserve Facebook, Instagram, site_title.
     - Collect 'sources' for each merged record.
     """
     all_results = []
@@ -3225,65 +3531,157 @@ def merge_results(*lists):
             continue
         all_results.extend(lst)
 
-    merged = {}
-    insertion_order = []
+    try:
+        from attio_sync import business_domain as _biz_domain, extract_social_links as _extract_socials
+    except ImportError:
+        _biz_domain = lambda u: ""
+        _extract_socials = lambda *a: {"facebook": "", "instagram": ""}
+
+    records = []
+    by_phone = {}
+    by_domain = {}
+    by_social = {}
+    by_email = {}
+    by_name = {}
+
+    def _simple_addr(raw_addr):
+        parts = normalize_address(raw_addr or "").split(",")
+        return parts[0].strip() if parts else ""
+
+    def _is_real_website(url):
+        if not url or is_catalog_url(url):
+            return False
+        low = url.lower()
+        return not any(s in low for s in ("facebook.com", "fb.com", "instagram.com"))
+
+    def _index_record(idx, rec):
+        ph = normalize_phone(rec.get("formatted_phone_number", ""))
+        if len(ph) >= 9:
+            by_phone.setdefault(ph, idx)
+        dom = _biz_domain(rec.get("website", ""))
+        if dom:
+            by_domain.setdefault(dom, idx)
+        soc = _extract_socials(rec.get("facebook", ""), rec.get("instagram", ""), rec.get("website", ""))
+        for s_url in soc.values():
+            if s_url:
+                by_social.setdefault(s_url.lower(), idx)
+        for em in rec.get("emails") or []:
+            em_l = (em or "").strip().lower()
+            if em_l and "@" in em_l and em_l not in _PLATFORM_EMAILS:
+                by_email.setdefault(em_l, idx)
+        nm = normalize_name(rec.get("name", ""))
+        if nm:
+            by_name.setdefault(nm, []).append(idx)
 
     for r in all_results:
-        name = r.get('name', '').strip()
+        name = (r.get("name") or "").strip()
         normalized_name = normalize_name(name)
-        address_parts = normalize_address(r.get('formatted_address', '')).split(',')
-        simple_address = address_parts[0].strip() if address_parts else ""
-        phone = normalize_phone(r.get('formatted_phone_number', ''))
-
         if not normalized_name:
             continue
 
-        key = f"{normalized_name}|{simple_address}|{phone}"
+        simple_addr = _simple_addr(r.get("formatted_address", ""))
+        phone = normalize_phone(r.get("formatted_phone_number", ""))
+        dom = _biz_domain(r.get("website", ""))
+        soc = _extract_socials(r.get("facebook", ""), r.get("instagram", ""), r.get("website", ""))
+        rec_emails = [
+            (e or "").strip().lower()
+            for e in (r.get("emails") or [])
+            if e and "@" in e and (e or "").strip().lower() not in _PLATFORM_EMAILS
+        ]
 
-        if key in merged:
-            existing = merged[key]
-            # Merge sources
-            for s in r.get('sources', []):
-                if s not in existing['sources']:
-                    existing['sources'].append(s)
+        match_idx = None
+        if len(phone) >= 9 and phone in by_phone:
+            match_idx = by_phone[phone]
+        elif dom and dom in by_domain:
+            # Wymagaj zgodności nazwy lub pustego/zgodnego adresu, żeby nie skleić 2 oddziałów sieci pod tą samą domeną
+            cand_idx = by_domain[dom]
+            cand = records[cand_idx]
+            cand_addr = _simple_addr(cand.get("formatted_address", ""))
+            if (
+                normalize_name(cand.get("name", "")) == normalized_name
+                or not simple_addr
+                or not cand_addr
+                or simple_addr == cand_addr
+            ):
+                match_idx = cand_idx
+        if match_idx is None:
+            for s_url in soc.values():
+                if s_url and s_url.lower() in by_social:
+                    match_idx = by_social[s_url.lower()]
+                    break
+        if match_idx is None:
+            for em_l in rec_emails:
+                if em_l in by_email:
+                    match_idx = by_email[em_l]
+                    break
+        if match_idx is None and normalized_name in by_name:
+            for cand_idx in by_name[normalized_name]:
+                cand = records[cand_idx]
+                cand_addr = _simple_addr(cand.get("formatted_address", ""))
+                cand_phone = normalize_phone(cand.get("formatted_phone_number", ""))
+                if (
+                    simple_addr == cand_addr
+                    or (not simple_addr and not cand_addr)
+                    or (not simple_addr or not cand_addr)
+                ) and (not phone or not cand_phone or phone == cand_phone):
+                    match_idx = cand_idx
+                    break
 
-            # Merge emails with Booksy priority
-            existing_emails = existing.get('emails') or []
-            new_emails = r.get('emails') or []
-            if 'booksy' in r.get('sources', []):
+        if match_idx is not None:
+            existing = records[match_idx]
+            for s in r.get("sources", []):
+                if s not in existing["sources"]:
+                    existing["sources"].append(s)
+
+            existing_emails = existing.get("emails") or []
+            new_emails = r.get("emails") or []
+            if "booksy" in r.get("sources", []):
                 combined = new_emails + [e for e in existing_emails if e not in new_emails]
             else:
                 combined = existing_emails + [e for e in new_emails if e not in existing_emails]
 
-            # Deduplicate preserving order
             seen = set()
             final_emails = []
             for e in combined:
                 if e and e not in seen:
                     seen.add(e)
                     final_emails.append(e)
-            existing['emails'] = final_emails
+            existing["emails"] = final_emails
 
-            # Fill missing fields (prefer non-empty)
-            if not existing.get('website') and r.get('website'):
-                existing['website'] = r.get('website')
-            if not existing.get('profile_url') and r.get('profile_url'):
-                existing['profile_url'] = r.get('profile_url')
-            if not existing.get('formatted_phone_number') and r.get('formatted_phone_number'):
-                existing['formatted_phone_number'] = r.get('formatted_phone_number')
-            if not existing.get('formatted_address') and r.get('formatted_address'):
-                existing['formatted_address'] = r.get('formatted_address')
-            if not existing.get('name') and r.get('name'):
-                existing['name'] = r.get('name')
+            # Preferuj prawdziwą stronę WWW nad linkiem katalogu/social media
+            ex_web = (existing.get("website") or "").strip()
+            new_web = (r.get("website") or "").strip()
+            if new_web and (not ex_web or (not _is_real_website(ex_web) and _is_real_website(new_web))):
+                existing["website"] = new_web
 
+            if not existing.get("profile_url") and r.get("profile_url"):
+                existing["profile_url"] = r.get("profile_url")
+            if not existing.get("formatted_phone_number") and r.get("formatted_phone_number"):
+                existing["formatted_phone_number"] = r.get("formatted_phone_number")
+            if not existing.get("formatted_address") and r.get("formatted_address"):
+                existing["formatted_address"] = r.get("formatted_address")
+            if not existing.get("facebook") and (r.get("facebook") or soc["facebook"]):
+                existing["facebook"] = r.get("facebook") or soc["facebook"]
+            if not existing.get("instagram") and (r.get("instagram") or soc["instagram"]):
+                existing["instagram"] = r.get("instagram") or soc["instagram"]
+            if not existing.get("site_title") and r.get("site_title"):
+                existing["site_title"] = r.get("site_title")
+            if not existing.get("name") and r.get("name"):
+                existing["name"] = r.get("name")
+            _index_record(match_idx, existing)
         else:
             new = dict(r)
-            new.setdefault('sources', list(r.get('sources', [])))
-            new['emails'] = list(dict.fromkeys(new.get('emails') or []))
-            merged[key] = new
-            insertion_order.append(key)
+            new.setdefault("sources", list(r.get("sources", [])))
+            new["emails"] = list(dict.fromkeys(new.get("emails") or []))
+            if soc["facebook"] and not new.get("facebook"):
+                new["facebook"] = soc["facebook"]
+            if soc["instagram"] and not new.get("instagram"):
+                new["instagram"] = soc["instagram"]
+            idx = len(records)
+            records.append(new)
+            _index_record(idx, new)
 
-    return [merged[k] for k in insertion_order]
+    return records
 
 def _rebuild_branza_sheets(wb, template_path):
     """Sync per-branża sheets from the 'Wszystkie' master sheet.
@@ -4049,7 +4447,11 @@ def save_to_csv(data, filename):
     try:
         with open(filename, mode='w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
-            writer.writerow(['Branża', 'Województwo', 'Miasto', 'Name', 'Address', 'Phone', 'Website', 'Email 1', 'Email 2', 'Email 3', 'Other Emails', 'Sources'])
+            writer.writerow([
+                'Branża', 'Województwo', 'Miasto', 'Name', 'Address', 'Phone',
+                'Website', 'Facebook', 'Instagram',
+                'Email 1', 'Email 2', 'Email 3', 'Other Emails', 'Sources',
+            ])
             for item in data:
                 emails = item.get('emails', [])
                 row_data = [
@@ -4059,7 +4461,9 @@ def save_to_csv(data, filename):
                     item.get('name', ''),
                     item.get('formatted_address', ''),
                     item.get('formatted_phone_number', ''),
-                    item.get('website', '')
+                    item.get('website', ''),
+                    item.get('facebook', ''),
+                    item.get('instagram', ''),
                 ]
                 for i in range(3):
                     row_data.append(emails[i] if i < len(emails) else '')
@@ -4073,12 +4477,13 @@ def save_to_csv(data, filename):
 
 
 def append_to_csv_master(data, csv_path):
-    """Append new records to the cumulative CSV master file.
+    """Append new records to the cumulative CSV master file and fill blank fields on existing rows.
 
-    Reads existing rows (if any) and deduplicates by normalized phone (+48 stripped),
-    business domain, Facebook/Instagram URL, email address, and normalized (name, city)
-    before appending. Automatically resolves unclear/missing company names from
-    website, Instagram, Facebook, or email.
+    Reads existing rows (if any) and matches by normalized phone (+48 stripped),
+    business domain, Facebook/Instagram URL, email address, and normalized (name, city).
+    - New leads are appended.
+    - Existing leads receive fill-blanks-only enrichment (missing Website/Facebook/Instagram/
+      Phone/Address/new unique emails) without overwriting existing values.
     """
     CSV_HEADERS = [
         'Branża', 'Województwo', 'Miasto', 'Name', 'Address', 'Phone',
@@ -4101,44 +4506,61 @@ def append_to_csv_master(data, csv_path):
         _resolve_name = lambda raw, **kw: strip_emoji(raw or '').strip()
         _val_email_syn = lambda e: (True, '')
 
-    seen_phones: set = set()
-    seen_domains: set = set()
-    seen_socials: set = set()
-    seen_emails: set = set()
-    seen_name_city: set = set()
+    idx_phones: dict = {}
+    idx_domains: dict = {}
+    idx_socials: dict = {}
+    idx_emails: dict = {}
+    idx_name_city: dict = {}
     existing_rows: list = []
+
+    def _row_emails(row_dict):
+        found = []
+        for col in ('Email 1', 'Email 2', 'Email 3', 'Other Emails'):
+            for em in re.split(r'[,;\s]+', row_dict.get(col, '') or ''):
+                em_s = em.strip()
+                if em_s and '@' in em_s and em_s.lower() not in _PLATFORM_EMAILS:
+                    if em_s.lower() not in {x.lower() for x in found}:
+                        found.append(em_s)
+        return found
+
+    def _index_row(row_idx, row_dict):
+        ph = normalize_phone(row_dict.get('Phone', ''))
+        if ph:
+            idx_phones.setdefault(ph, row_idx)
+        dom = _biz_domain(row_dict.get('Website', ''))
+        if dom:
+            idx_domains.setdefault(dom, row_idx)
+        soc_ex = _extract_socials(row_dict.get('Facebook', ''), row_dict.get('Instagram', ''), row_dict.get('Website', ''))
+        for s_url in soc_ex.values():
+            if s_url:
+                idx_socials.setdefault(s_url.lower(), row_idx)
+        nm = normalize_name(strip_emoji(row_dict.get('Name', '')))
+        ct = normalize_name(row_dict.get('Miasto', ''))
+        if nm:
+            idx_name_city.setdefault((nm, ct), row_idx)
+            if not ct:
+                idx_name_city.setdefault((nm, ''), row_idx)
+        for em in _row_emails(row_dict):
+            idx_emails.setdefault(em.lower(), row_idx)
 
     os.makedirs(os.path.dirname(csv_path) or '.', exist_ok=True)
 
     if os.path.exists(csv_path):
         try:
-            with open(csv_path, newline='', encoding='utf-8') as f:
+            with open(csv_path, newline='', encoding='utf-8-sig') as f:
                 reader = csv.DictReader(f)
                 for row in reader:
+                    row.setdefault('Facebook', '')
+                    row.setdefault('Instagram', '')
+                    row_idx = len(existing_rows)
                     existing_rows.append(row)
-                    ph = normalize_phone(row.get('Phone', ''))
-                    if ph:
-                        seen_phones.add(ph)
-                    dom = _biz_domain(row.get('Website', ''))
-                    if dom:
-                        seen_domains.add(dom)
-                    soc_ex = _extract_socials(row.get('Facebook', ''), row.get('Instagram', ''), row.get('Website', ''))
-                    for s_url in soc_ex.values():
-                        if s_url:
-                            seen_socials.add(s_url.lower())
-                    nm = normalize_name(strip_emoji(row.get('Name', '')))
-                    ct = normalize_name(row.get('Miasto', ''))
-                    if nm:
-                        seen_name_city.add((nm, ct))
-                    for col in ('Email 1', 'Email 2', 'Email 3', 'Other Emails'):
-                        for em in re.split(r'[,;\s]+', row.get(col, '') or ''):
-                            em_l = em.strip().lower()
-                            if em_l and '@' in em_l and em_l not in _PLATFORM_EMAILS:
-                                seen_emails.add(em_l)
+                    _index_row(row_idx, row)
         except Exception as e:
             logger.warning("Could not read existing CSV master %s: %s", csv_path, e)
 
     new_rows = []
+    updated_existing = 0
+
     for item in data:
         raw_name = item.get('name', '').strip()
         website = item.get('website', '')
@@ -4175,24 +4597,59 @@ def append_to_csv_master(data, csv_path):
 
         if not nm and not ph and not dom and not emails_low and not item_socials:
             continue
-        if (
-            (ph and ph in seen_phones)
-            or (dom and dom in seen_domains)
-            or bool(item_socials & seen_socials)
-            or bool(emails_low & seen_emails)
-            or (nm and ((nm, ct) in seen_name_city or (nm, '') in seen_name_city))
-        ):
+
+        match_idx = None
+        if ph and ph in idx_phones:
+            match_idx = idx_phones[ph]
+        elif dom and dom in idx_domains:
+            match_idx = idx_domains[dom]
+        elif any(s in idx_socials for s in item_socials):
+            match_idx = next(idx_socials[s] for s in item_socials if s in idx_socials)
+        elif any(em in idx_emails for em in emails_low):
+            match_idx = next(idx_emails[em] for em in emails_low if em in idx_emails)
+        elif nm and (nm, ct) in idx_name_city:
+            match_idx = idx_name_city[(nm, ct)]
+        elif nm and (nm, '') in idx_name_city:
+            match_idx = idx_name_city[(nm, '')]
+
+        if match_idx is not None:
+            # Fill-blanks-only na istniejącym wierszu (nigdy nie nadpisuje istniejących wartości!)
+            target_row = existing_rows[match_idx] if match_idx < len(existing_rows) else new_rows[match_idx - len(existing_rows)]
+            changed = False
+            if not (target_row.get('Phone') or '').strip() and item.get('formatted_phone_number'):
+                target_row['Phone'] = item['formatted_phone_number']
+                changed = True
+            if not (target_row.get('Address') or '').strip() and item.get('formatted_address'):
+                target_row['Address'] = item['formatted_address']
+                changed = True
+            old_web = (target_row.get('Website') or '').strip()
+            if website and (not old_web or (is_catalog_url(old_web) and not is_catalog_url(website))):
+                target_row['Website'] = website
+                changed = True
+            if not (target_row.get('Facebook') or '').strip() and fb:
+                target_row['Facebook'] = fb
+                changed = True
+            if not (target_row.get('Instagram') or '').strip() and ig:
+                target_row['Instagram'] = ig
+                changed = True
+            if emails:
+                cur_emails = _row_emails(target_row)
+                cur_low = {e.lower() for e in cur_emails}
+                added_emails = [e for e in emails if e.lower() not in cur_low]
+                if added_emails:
+                    combined = cur_emails + added_emails
+                    target_row['Email 1'] = combined[0] if len(combined) > 0 else ''
+                    target_row['Email 2'] = combined[1] if len(combined) > 1 else ''
+                    target_row['Email 3'] = combined[2] if len(combined) > 2 else ''
+                    target_row['Other Emails'] = ', '.join(combined[3:]) if len(combined) > 3 else ''
+                    changed = True
+            if changed:
+                _index_row(match_idx, target_row)
+                if match_idx < len(existing_rows):
+                    updated_existing += 1
             continue
 
-        if ph:
-            seen_phones.add(ph)
-        if dom:
-            seen_domains.add(dom)
-        seen_socials.update(item_socials)
-        seen_emails.update(emails_low)
-        if nm:
-            seen_name_city.add((nm, ct))
-        new_rows.append({
+        row_dict = {
             'Branża': item.get('branża', ''),
             'Województwo': item.get('województwo', ''),
             'Miasto': item.get('miasto', ''),
@@ -4207,10 +4664,13 @@ def append_to_csv_master(data, csv_path):
             'Email 3': emails[2] if len(emails) > 2 else '',
             'Other Emails': ', '.join(emails[3:]) if len(emails) > 3 else '',
             'Sources': ', '.join(item.get('sources') or []),
-        })
+        }
+        new_idx = len(existing_rows) + len(new_rows)
+        new_rows.append(row_dict)
+        _index_row(new_idx, row_dict)
 
-    if not new_rows:
-        logger.info("CSV master: no new records to append (all %d already present)", len(data))
+    if not new_rows and updated_existing == 0:
+        logger.info("CSV master: no new records or blank-field enrichments (all %d already present)", len(data))
         return
 
     try:
@@ -4219,7 +4679,10 @@ def append_to_csv_master(data, csv_path):
             writer.writeheader()
             writer.writerows(existing_rows)
             writer.writerows(new_rows)
-        logger.info("CSV master: appended %d new records → %s (%d total)", len(new_rows), csv_path, len(existing_rows) + len(new_rows))
+        logger.info(
+            "CSV master: appended %d new, enriched %d existing → %s (%d total)",
+            len(new_rows), updated_existing, csv_path, len(existing_rows) + len(new_rows),
+        )
     except Exception as e:
         logger.error("Error writing CSV master %s: %s", csv_path, e)
 
@@ -4262,6 +4725,11 @@ def main():
     parser.add_argument("--sync-attio", action="store_true", help="Automatically sync deduplicated CSV leads to Attio after scraping")
     parser.add_argument("--attio-dry-run", action="store_true", help="Run Attio sync in dry-run mode (no writes)")
     parser.add_argument("--attio-fill-missing", action="store_true", help="Fill only empty fields (WWW, IG, FB, new emails) on existing Attio leads without overwriting")
+    parser.add_argument(
+        "--sources",
+        default="all",
+        help="Comma-separated sources or preset: 'all' (default), 'fast' (google,booksy,firmynet,znanylekarz), or explicit list e.g. 'google,booksy'",
+    )
     args = parser.parse_args()
 
     # Walidacja: odrzuć argumenty wyglądające jak ścieżki pliku (artefakty bat/shell)
@@ -4527,128 +4995,154 @@ def main():
     all_aleo_results = []
     
     session = create_session()
+    cffi_session = create_cffi_session()
     cache_conn = setup_cache(args.cache_db) if scrape_emails_choice else None
+
+    # Rozwiąż aktywne źródła z flagi --sources
+    _ALL_SOURCES = {
+        "panoramafirm", "pkt", "booksy", "spaeden", "fresha", "moment",
+        "cylex", "oferteo", "firmynet", "biznesfinder", "znanylekarz",
+        "fixly", "aleo", "google",
+    }
+    _FAST_SOURCES = {"google", "booksy", "firmynet", "znanylekarz"}
+    raw_sources = (args.sources or "all").strip().lower()
+    if raw_sources == "all":
+        enabled_sources = set(_ALL_SOURCES)
+    elif raw_sources == "fast":
+        enabled_sources = set(_FAST_SOURCES)
+    else:
+        enabled_sources = {s.strip() for s in raw_sources.split(",") if s.strip()}
 
     # Gwarancja zamknięcia cache_conn nawet przy nieoczekiwanym wyjątku
     import atexit as _atexit
     _atexit.register(lambda: cache_conn.close() if cache_conn is not None else None)
 
-    # Fetch data from Panorama Firm (always)
-    logger.info("=== Fetching data from Panorama Firm ===")
-    all_panorama_results = scrape_panorama_firm(
-        normalized_query, location, max_pages=args.max_pages, session=session,
-        use_headless=args.use_headless
-    )
-    annotate_sources(all_panorama_results, 'panoramafirm')
+    # Fetch data from Panorama Firm (używa curl_cffi TLS impersonation!)
+    if "panoramafirm" in enabled_sources:
+        logger.info("=== Fetching data from Panorama Firm ===")
+        all_panorama_results = scrape_panorama_firm(
+            normalized_query, location, max_pages=args.max_pages, session=cffi_session,
+            use_headless=args.use_headless
+        )
+        annotate_sources(all_panorama_results, 'panoramafirm')
 
-    # Fetch data from PKT.pl (always)
-    logger.info("=== Fetching data from PKT.pl ===")
-    all_pkt_results = scrape_pkt_pl(
-        normalized_query, location, max_pages=args.max_pages, session=session,
-        use_headless=args.use_headless
-    )
-    annotate_sources(all_pkt_results, 'pkt')
+    # Fetch data from PKT.pl (używa curl_cffi TLS impersonation!)
+    if "pkt" in enabled_sources:
+        logger.info("=== Fetching data from PKT.pl ===")
+        all_pkt_results = scrape_pkt_pl(
+            normalized_query, location, max_pages=args.max_pages, session=cffi_session,
+            use_headless=args.use_headless
+        )
+        annotate_sources(all_pkt_results, 'pkt')
 
-    # Fetch data from Booksy (optional)
-    if use_booksy_choice:
+    # Fetch data from Booksy (przekazujemy oryginalne query, aby obsłużyć wielokategorialne mapowanie!)
+    if use_booksy_choice and "booksy" in enabled_sources:
         logger.info("=== Fetching data from Booksy ===")
-        all_booksy_results = scrape_booksy(normalized_query, location, max_pages=args.max_pages, session=session)
+        all_booksy_results = scrape_booksy(query, location, max_pages=args.max_pages, session=cffi_session)
         annotate_sources(all_booksy_results, 'booksy')
 
-    # Fetch data from SPAeden rankings (always for spa/wellness/massage)
-    if map_query_to_category(normalized_query) in ("spa", "wellness", "masaz"):
+    # Fetch data from SPAeden rankings (filtrowane po lokalizacji!)
+    if "spaeden" in enabled_sources and map_query_to_category(normalized_query) in ("spa", "wellness", "masaz", "hotel"):
         logger.info("=== Fetching data from SPAeden rankings ===")
-        all_spaeden_results = scrape_spaeden_rankings(session=session)
+        all_spaeden_results = scrape_spaeden_rankings(session=session, location=location)
         annotate_sources(all_spaeden_results, 'spaeden')
 
-    # Fetch data from Fresha (always)
-    logger.info("=== Fetching data from Fresha ===")
-    all_fresha_results = scrape_fresha(
-        normalized_query,
-        location,
-        session=session,
-        max_pages=args.max_pages,
-        use_headless=args.use_headless,
-        headless_wait=args.headless_wait
-    )
-    annotate_sources(all_fresha_results, 'fresha')
+    # Fetch data from Fresha
+    if "fresha" in enabled_sources:
+        logger.info("=== Fetching data from Fresha ===")
+        all_fresha_results = scrape_fresha(
+            normalized_query,
+            location,
+            session=cffi_session,
+            max_pages=args.max_pages,
+            use_headless=args.use_headless,
+            headless_wait=args.headless_wait
+        )
+        annotate_sources(all_fresha_results, 'fresha')
 
     # Fetch data from Moment.pl (Booksy mirror)
-    logger.info("=== Fetching data from Moment.pl ===")
-    all_moment_results = scrape_moment(normalized_query, location, session=session, max_pages=args.max_pages)
-    annotate_sources(all_moment_results, 'moment')
+    if "moment" in enabled_sources:
+        logger.info("=== Fetching data from Moment.pl ===")
+        all_moment_results = scrape_moment(normalized_query, location, session=session, max_pages=args.max_pages)
+        annotate_sources(all_moment_results, 'moment')
 
-    # Fetch data from Cylex
-    logger.info("=== Fetching data from Cylex ===")
-    all_cylex_results = scrape_cylex(
-        normalized_query,
-        location,
-        session=session,
-        max_pages=args.max_pages,
-        use_headless=args.use_headless,
-        headless_wait=args.headless_wait
-    )
-    annotate_sources(all_cylex_results, 'cylex')
+    # Fetch data from Cylex (używa curl_cffi TLS impersonation!)
+    if "cylex" in enabled_sources:
+        logger.info("=== Fetching data from Cylex ===")
+        all_cylex_results = scrape_cylex(
+            normalized_query,
+            location,
+            session=cffi_session,
+            max_pages=args.max_pages,
+            use_headless=args.use_headless,
+            headless_wait=args.headless_wait
+        )
+        annotate_sources(all_cylex_results, 'cylex')
 
     # Fetch data from Oferteo
-    logger.info("=== Fetching data from Oferteo ===")
-    all_oferteo_results = scrape_oferteo(normalized_query, location, session=session, max_pages=args.max_pages)
-    annotate_sources(all_oferteo_results, 'oferteo')
+    if "oferteo" in enabled_sources:
+        logger.info("=== Fetching data from Oferteo ===")
+        all_oferteo_results = scrape_oferteo(normalized_query, location, session=cffi_session, max_pages=args.max_pages)
+        annotate_sources(all_oferteo_results, 'oferteo')
 
     # Fetch data from Firmy.net
-    logger.info("=== Fetching data from Firmy.net ===")
-    all_firmynet_results = scrape_firmynet(
-        normalized_query,
-        location,
-        session=session,
-        max_pages=args.max_pages,
-        use_headless=args.use_headless,
-        headless_wait=args.headless_wait
-    )
-    annotate_sources(all_firmynet_results, 'firmynet')
+    if "firmynet" in enabled_sources:
+        logger.info("=== Fetching data from Firmy.net ===")
+        all_firmynet_results = scrape_firmynet(
+            normalized_query,
+            location,
+            session=cffi_session,
+            max_pages=args.max_pages,
+            use_headless=args.use_headless,
+            headless_wait=args.headless_wait
+        )
+        annotate_sources(all_firmynet_results, 'firmynet')
 
     # Fetch data from BiznesFinder
-    logger.info("=== Fetching data from BiznesFinder ===")
-    all_biznesfinder_results = scrape_biznesfinder(
-        normalized_query,
-        location,
-        session=session,
-        max_pages=args.max_pages,
-        use_headless=args.use_headless,
-        headless_wait=args.headless_wait
-    )
-    annotate_sources(all_biznesfinder_results, 'biznesfinder')
+    if "biznesfinder" in enabled_sources:
+        logger.info("=== Fetching data from BiznesFinder ===")
+        all_biznesfinder_results = scrape_biznesfinder(
+            normalized_query,
+            location,
+            session=cffi_session,
+            max_pages=args.max_pages,
+            use_headless=args.use_headless,
+            headless_wait=args.headless_wait
+        )
+        annotate_sources(all_biznesfinder_results, 'biznesfinder')
 
-    # Fetch data from ZnanyLekarz (only relevant for massage/physio)
-    if map_query_to_category(normalized_query) in ("masaz", "fizjoterapia"):
+    # Fetch data from ZnanyLekarz (masaże, fizjoterapia, poczekalnie/gabinety, medycyna estetyczna)
+    if "znanylekarz" in enabled_sources and map_query_to_category(normalized_query) in ("masaz", "fizjoterapia"):
         logger.info("=== Fetching data from ZnanyLekarz ===")
-        all_znanylekarz_results = scrape_znanylekarz(normalized_query, location, session=session, max_pages=args.max_pages)
+        all_znanylekarz_results = scrape_znanylekarz(normalized_query, location, session=cffi_session, max_pages=args.max_pages)
         annotate_sources(all_znanylekarz_results, 'znanylekarz')
 
     # Fetch data from Fixly (best-effort, JS-rendered)
-    logger.info("=== Fetching data from Fixly ===")
-    all_fixly_results = scrape_fixly(
-        normalized_query,
-        location,
-        session=session,
-        max_pages=args.max_pages,
-        use_headless=args.use_headless,
-        headless_wait=args.headless_wait
-    )
-    annotate_sources(all_fixly_results, 'fixly')
+    if "fixly" in enabled_sources:
+        logger.info("=== Fetching data from Fixly ===")
+        all_fixly_results = scrape_fixly(
+            normalized_query,
+            location,
+            session=cffi_session,
+            max_pages=args.max_pages,
+            use_headless=args.use_headless,
+            headless_wait=args.headless_wait
+        )
+        annotate_sources(all_fixly_results, 'fixly')
 
     # KRS search API (api-rs.ms.gov.pl) is unavailable — DNS fails.
     # KRS enrichment (enrich_with_krs) still works for records that already have a KRS
-    # number in their profile_url; that runs later after merge.
+    # number in their profile_url or extracted from website RODO/footer; runs later after merge.
     all_krs_results = []
 
-    # Fetch data from Aleo.com (Polish B2B catalog)
-    logger.info("=== Fetching data from Aleo.com ===")
-    all_aleo_results = scrape_aleo(normalized_query, location, session=session, max_pages=args.max_pages)
-    annotate_sources(all_aleo_results, 'aleo')
+    # Fetch data from Aleo.com (używa curl_cffi TLS impersonation!)
+    if "aleo" in enabled_sources:
+        logger.info("=== Fetching data from Aleo.com ===")
+        all_aleo_results = scrape_aleo(normalized_query, location, session=cffi_session, max_pages=args.max_pages)
+        annotate_sources(all_aleo_results, 'aleo')
 
     # Fetch data from Google Places (optional)
-    if use_google_choice and API_KEY:
+    if use_google_choice and API_KEY and "google" in enabled_sources:
         logger.info("=== Fetching data from Google Places API ===")
         next_page_token_val = None # Renamed 'token' to avoid conflict with token module
         page_count = 0

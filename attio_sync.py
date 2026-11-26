@@ -132,6 +132,14 @@ INDUSTRY_EN_PL_MAP: dict[str, tuple[str, ...]] = {
     "termy": ("SPA & Wellness",),
     "float": ("SPA & Wellness",),
     "floating": ("SPA & Wellness",),
+    "grota solna": ("SPA & Wellness",),
+    "haloterapia": ("SPA & Wellness",),
+    "normobaria": ("SPA & Wellness",),
+    "komora hiperbaryczna": ("SPA & Wellness",),
+    "biohacking": ("SPA & Wellness",),
+    "longevity": ("SPA & Wellness",),
+    "head spa": ("SPA & Wellness", "Kobido & Masaż"),
+    "sanatorium": ("SPA & Wellness", "Hotele i Pensjonaty"),
     # 2. Kobido & Masaż
     "kobido": ("Kobido & Masaż",),
     "kobido & masaż": ("Kobido & Masaż",),
@@ -147,6 +155,10 @@ INDUSTRY_EN_PL_MAP: dict[str, tuple[str, ...]] = {
     "thai massage": ("Kobido & Masaż",),
     "balinese massage": ("Kobido & Masaż",),
     "bodywork": ("Kobido & Masaż",),
+    "ajurweda": ("Kobido & Masaż",),
+    "ayurveda": ("Kobido & Masaż",),
+    "refleksologia": ("Kobido & Masaż",),
+    "akupunktura": ("Kobido & Masaż",),
     # 3. Beauty / Salon Urody
     "beauty": ("Beauty / Salon Urody",),
     "beauty salon": ("Beauty / Salon Urody",),
@@ -166,6 +178,17 @@ INDUSTRY_EN_PL_MAP: dict[str, tuple[str, ...]] = {
     "kosmetyka": ("Beauty / Salon Urody",),
     "kosmetologia": ("Beauty / Salon Urody",),
     "medycyna estetyczna": ("Beauty / Salon Urody",),
+    "podologia": ("Beauty / Salon Urody", "Poczekalnia / Gabinet"),
+    "trychologia": ("Beauty / Salon Urody",),
+    "depilacja laserowa": ("Beauty / Salon Urody",),
+    "makijaz permanentny": ("Beauty / Salon Urody",),
+    "makijaż permanentny": ("Beauty / Salon Urody",),
+    "endermologia": ("Beauty / Salon Urody",),
+    "tattoo": ("Beauty / Salon Urody",),
+    "studio tatuazu": ("Beauty / Salon Urody",),
+    "studio tatuażu": ("Beauty / Salon Urody",),
+    "tatuaz": ("Beauty / Salon Urody",),
+    "tatuaż": ("Beauty / Salon Urody",),
     # 4. Hotele i Pensjonaty
     "hotel": ("Hotele i Pensjonaty",),
     "hotels": ("Hotele i Pensjonaty",),
@@ -180,6 +203,10 @@ INDUSTRY_EN_PL_MAP: dict[str, tuple[str, ...]] = {
     "aparthotel": ("Hotele i Pensjonaty",),
     "hostel": ("Hotele i Pensjonaty",),
     "hospitality": ("Hotele i Pensjonaty",),
+    "glamping": ("Hotele i Pensjonaty",),
+    "agroturystyka": ("Hotele i Pensjonaty",),
+    "dom weselny": ("Hotele i Pensjonaty",),
+    "sala bankietowa": ("Hotele i Pensjonaty",),
     "hotel-spa": ("Hotele i Pensjonaty", "SPA & Wellness"),
     "hotel spa": ("Hotele i Pensjonaty", "SPA & Wellness"),
     "hotel & spa": ("Hotele i Pensjonaty", "SPA & Wellness"),
@@ -203,6 +230,11 @@ INDUSTRY_EN_PL_MAP: dict[str, tuple[str, ...]] = {
     "gastronomia": ("Restauracje",),
     "bar": ("Restauracje",),
     "pub": ("Restauracje",),
+    "wine bar": ("Restauracje",),
+    "winiarnia": ("Restauracje",),
+    "cocktail bar": ("Restauracje",),
+    "ramen": ("Restauracje",),
+    "brunch": ("Restauracje",),
     # 6. Kawiarnie
     "cafe": ("Kawiarnie",),
     "café": ("Kawiarnie",),
@@ -218,6 +250,11 @@ INDUSTRY_EN_PL_MAP: dict[str, tuple[str, ...]] = {
     "kawiarnie": ("Kawiarnie",),
     "cukiernia": ("Kawiarnie",),
     "palarnia kawy": ("Kawiarnie",),
+    "lodziarnia": ("Kawiarnie",),
+    "gelateria": ("Kawiarnie",),
+    "herbaciarnia": ("Kawiarnie",),
+    "matcha": ("Kawiarnie",),
+    "boulangerie": ("Kawiarnie",),
     # 7. Fitness / Siłownia
     "fitness": ("Fitness / Siłownia",),
     "fitness / siłownia": ("Fitness / Siłownia",),
@@ -232,15 +269,30 @@ INDUSTRY_EN_PL_MAP: dict[str, tuple[str, ...]] = {
     "silownia": ("Fitness / Siłownia",),
     "siłownia": ("Fitness / Siłownia",),
     "klub fitness": ("Fitness / Siłownia",),
+    "trening ems": ("Fitness / Siłownia",),
+    "studio ems": ("Fitness / Siłownia",),
+    "squash": ("Fitness / Siłownia",),
+    "padel": ("Fitness / Siłownia",),
+    "boulderownia": ("Fitness / Siłownia",),
+    "scianka wspinaczkowa": ("Fitness / Siłownia",),
+    "ścianka wspinaczkowa": ("Fitness / Siłownia",),
+    "szkola tanca": ("Fitness / Siłownia",),
+    "szkoła tańca": ("Fitness / Siłownia",),
+    "pole dance": ("Fitness / Siłownia",),
+    "sztuki walki": ("Fitness / Siłownia",),
     # 8. Joga / Pilates / Medytacja
     "joga": ("Joga / Pilates / Medytacja",),
     "studio jogi": ("Joga / Pilates / Medytacja",),
     "yoga": ("Joga / Pilates / Medytacja",),
     "yoga studio": ("Joga / Pilates / Medytacja",),
     "pilates": ("Joga / Pilates / Medytacja",),
+    "reformer pilates": ("Joga / Pilates / Medytacja",),
     "meditation": ("Joga / Pilates / Medytacja",),
     "medytacja": ("Joga / Pilates / Medytacja",),
     "mindfulness": ("Joga / Pilates / Medytacja",),
+    "stretching": ("Joga / Pilates / Medytacja",),
+    "barre": ("Joga / Pilates / Medytacja",),
+    "sound healing": ("Joga / Pilates / Medytacja",),
     "joga / pilates / medytacja": ("Joga / Pilates / Medytacja",),
     # 9. Salon Fryzjerski / Barber
     "fryzjer": ("Salon Fryzjerski / Barber",),
@@ -277,6 +329,15 @@ INDUSTRY_EN_PL_MAP: dict[str, tuple[str, ...]] = {
     "osteopatia": ("Poczekalnia / Gabinet",),
     "osteopathy": ("Poczekalnia / Gabinet",),
     "chiropractor": ("Poczekalnia / Gabinet",),
+    "weterynarz": ("Poczekalnia / Gabinet",),
+    "klinika weterynaryjna": ("Poczekalnia / Gabinet",),
+    "przychodnia weterynaryjna": ("Poczekalnia / Gabinet",),
+    "veterinary": ("Poczekalnia / Gabinet",),
+    "psychoterapia": ("Poczekalnia / Gabinet",),
+    "psycholog": ("Poczekalnia / Gabinet",),
+    "dietetyk": ("Poczekalnia / Gabinet",),
+    "logopeda": ("Poczekalnia / Gabinet",),
+    "kancelaria": ("Poczekalnia / Gabinet",),
     # 11. Sklep / Retail
     "sklep": ("Sklep / Retail",),
     "sklep / retail": ("Sklep / Retail",),
@@ -287,6 +348,13 @@ INDUSTRY_EN_PL_MAP: dict[str, tuple[str, ...]] = {
     "butik": ("Sklep / Retail",),
     "showroom": ("Sklep / Retail",),
     "concept store": ("Sklep / Retail",),
+    "salon sukien slubnych": ("Sklep / Retail",),
+    "salon sukien ślubnych": ("Sklep / Retail",),
+    "salon optyczny": ("Sklep / Retail", "Poczekalnia / Gabinet"),
+    "optyk": ("Sklep / Retail", "Poczekalnia / Gabinet"),
+    "perfumeria": ("Sklep / Retail",),
+    "jubiler": ("Sklep / Retail",),
+    "kwiaciarnia": ("Sklep / Retail",),
     # 12. Lokal Usługowy / Inne
     "inne": ("Lokal Usługowy / Inne",),
     "other": ("Lokal Usługowy / Inne",),
@@ -296,66 +364,74 @@ INDUSTRY_EN_PL_MAP: dict[str, tuple[str, ...]] = {
     "lokal usługowy": ("Lokal Usługowy / Inne",),
     "lokal uslugowy": ("Lokal Usługowy / Inne",),
     "lokal usługowy / inne": ("Lokal Usługowy / Inne",),
+    "coworking": ("Lokal Usługowy / Inne",),
+    "biuro serwisowane": ("Lokal Usługowy / Inne",),
+    "bawialnia": ("Lokal Usługowy / Inne",),
+    "sala zabaw": ("Lokal Usługowy / Inne",),
+    "kregielnia": ("Lokal Usługowy / Inne",),
+    "kręgielnia": ("Lokal Usługowy / Inne",),
+    "galeria sztuki": ("Lokal Usługowy / Inne",),
+    "groomer": ("Lokal Usługowy / Inne",),
 }
 
 # Alias wsteczny
 _RAW_INDUSTRY_MAP = INDUSTRY_EN_PL_MAP
 
-# Wzorce wzbogacające multiselect na podstawie nazwy firmy i domeny/strony (PL + EN)
+# Wzorce wzbogacające multiselect na podstawie nazwy firmy i domeny/strony (PL + EN + branże pokrewne)
 _SIGNAL_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (
         "Hotele i Pensjonaty",
         re.compile(
-            r"\b(hotel\w*|resort\w*|pensjonat\w*|aparthotel\w*|guesthouse|guest\s+house|b&b|bed\s+and\s+breakfast|palac\w*|pałac\w*|dwor\w*|dwór|zamek|villa|willa|nocleg\w*|hostel\w*)\b",
+            r"\b(hotel\w*|resort\w*|pensjonat\w*|aparthotel\w*|guesthouse|guest\s+house|b&b|bed\s+and\s+breakfast|palac\w*|pałac\w*|dwor\w*|dwór|zamek|villa|willa|nocleg\w*|hostel\w*|glamping\w*|agroturystyk\w*|dom\s+weseln\w*|sal[ai]\s+bankietow\w*)\b",
             re.IGNORECASE,
         ),
     ),
     (
         "SPA & Wellness",
         re.compile(
-            r"\b(spa|day\s*spa|wellness|odnow\w*\s+biologiczn\w*|float\w*|saun\w*|term[ay]|thermal|balneolog\w*|hammam|aromaterap\w*|aromatherapy)\b",
+            r"\b(spa|day\s*spa|head\s*spa|wellness|odnow\w*\s+biologiczn\w*|float\w*|saun\w*|term[ay]|thermal|balneolog\w*|hammam|aromaterap\w*|aromatherapy|grot\w*\s+soln\w*|haloterapi\w*|normobari\w*|hiperbaryczn\w*|biohacking|longevity|łaźni\w*|lazni\w*|bania\s+ruska|kriokomor\w*|sanatori\w*)\b",
             re.IGNORECASE,
         ),
     ),
     (
         "Kobido & Masaż",
         re.compile(
-            r"\b(kobido|masaz\w*|masaż\w*|massage\w*|tajsk\w*|thai\s+massage|balijsk\w*|balinese|lomi|bodywork|shiatsu|refleksologi\w*|reflexology)\b",
+            r"\b(kobido|masaz\w*|masaż\w*|massage\w*|tajsk\w*|thai\s+massage|balijsk\w*|balinese|lomi|bodywork|shiatsu|refleksologi\w*|reflexology|ajurwed\w*|ayurved\w*|akupunktur\w*|head\s*spa)\b",
             re.IGNORECASE,
         ),
     ),
     (
         "Beauty / Salon Urody",
         re.compile(
-            r"\b(beauty|urod\w*|kosmetolog\w*|kosmetycz\w*|cosmet\w*|estetic\w*|aesthetic\w*|medycyn\w*\s+estetyczn\w*|manicure|pedicure|nail\w*|paznokci\w*|depilacj\w*|brow\w*|lash\w*|rzęs\w*|rzes\w*|makija[żz]\w*|makeup)\b",
+            r"\b(beauty|urod\w*|kosmetolog\w*|kosmetycz\w*|cosmet\w*|estetic\w*|aesthetic\w*|medycyn\w*\s+estetyczn\w*|manicure|pedicure|nail\w*|paznokci\w*|depilacj\w*|brow\w*|lash\w*|rzęs\w*|rzes\w*|makija[żz]\w*|makeup|podolog\w*|trycholog\w*|endermologi\w*|tatua[żz]\w*|tattoo\w*|piercing\w*)\b",
             re.IGNORECASE,
         ),
     ),
     (
         "Restauracje",
         re.compile(
-            r"\b(restaurac\w*|restaurant\w*|bistro|trattoria|pizzeri\w*|sushi|karczm\w*|ober[żz]\w*|gastronomi\w*|gastronomy|steakhouse|tapas|fine\s+dining)\b",
+            r"\b(restaurac\w*|restaurant\w*|bistro|trattoria|pizzeri\w*|sushi|karczm\w*|ober[żz]\w*|gastronomi\w*|gastronomy|steakhouse|tapas|fine\s+dining|wine\s*bar\w*|winiarni\w*|cocktail\s*bar\w*|multitap\w*|ramen|brunch|shisha\s+lounge)\b",
             re.IGNORECASE,
         ),
     ),
     (
         "Kawiarnie",
         re.compile(
-            r"\b(kawiarni\w*|coffee\w*|caf[eé]|caffe|espresso|palarni\w*\s+kaw\w*|cukierni\w*|piekarni\w*|bakery|patisserie|tea\s+house)\b",
+            r"\b(kawiarni\w*|coffee\w*|caf[eé]|caffe|espresso|palarni\w*\s+kaw\w*|cukierni\w*|piekarni\w*|bakery|patisserie|boulangerie|tea\s+house|herbaciarni\w*|lodziarni\w*|gelateri\w*|matcha\s+bar)\b",
             re.IGNORECASE,
         ),
     ),
     (
         "Fitness / Siłownia",
         re.compile(
-            r"\b(fitness|gym|siłowni\w*|silowni\w*|crossfit|trening\w*\s+personaln\w*|personal\s+training|health\s+club|workout)\b",
+            r"\b(fitness|gym|siłowni\w*|silowni\w*|crossfit|trening\w*\s+(?:personaln\w*|ems)|studio\s+ems|personal\s+training|health\s+club|workout|squash\w*|padel\w*|boulderowni\w*|wspinaczk\w*|szkoł\w*\s+tańc\w*|szkol\w*\s+tanc\w*|pole\s+dance|sztuk\w*\s+walki)\b",
             re.IGNORECASE,
         ),
     ),
     (
         "Joga / Pilates / Medytacja",
         re.compile(
-            r"\b(jog[ai]|yoga|pilates|medytacj\w*|meditation|mindfulness|ashtanga|vinyasa|hatha)\b",
+            r"\b(jog[ai]|yoga|pilates|reformer|medytacj\w*|meditation|mindfulness|ashtanga|vinyasa|hatha|barre|stretching|sound\s+healing|breathwork)\b",
             re.IGNORECASE,
         ),
     ),
@@ -369,26 +445,31 @@ _SIGNAL_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (
         "Poczekalnia / Gabinet",
         re.compile(
-            r"\b(fizjoterap\w*|physiotherap\w*|physical\s+therapy|fizjo\w*|rehabilitac\w*|rehab\w*|osteopat\w*|kinezyterap\w*|terapi\w*\s+manualn\w*|stomatolog\w*|dentyst\w*|dentist\w*|dental|klinik\w*|clinic|przychodni\w*|poczekalni\w*|waiting\s+room|chiropract\w*)\b",
+            r"\b(fizjoterap\w*|physiotherap\w*|physical\s+therapy|fizjo\w*|rehabilitac\w*|rehab\w*|osteopat\w*|kinezyterap\w*|terapi\w*\s+manualn\w*|stomatolog\w*|dentyst\w*|dentist\w*|dental|klinik\w*|clinic|przychodni\w*|poczekalni\w*|waiting\s+room|chiropract\w*|weterynar\w*|veterinary|psychoterap\w*|psycholog\w*|logoped\w*|dietetyk\w*|optometryst\w*|protetyk\w*\s+słuchu)\b",
             re.IGNORECASE,
         ),
     ),
     (
         "Sklep / Retail",
         re.compile(
-            r"\b(sklep\w*|butik\w*|boutique|showroom|concept\s+store|retail|store)\b",
+            r"\b(sklep\w*|butik\w*|boutique|showroom|concept\s+store|retail|store|sukien\s+[śs]lubn\w*|salon\s+optyczn\w*|optyk\w*|perfumeri\w*|jubiler\w*|kwiaciarni\w*|delikates\w*|ksi[ęe]garni\w*)\b",
             re.IGNORECASE,
         ),
     ),
 ]
 
+_PET_GROOMING_RE = re.compile(
+    r"\b(psi\w*\s+(?:spa|fryzjer\w*|salon\w*)|salon\s+(?:dla\s+)?ps[óo]w|groomer\w*|grooming\s+ps[óo]w|strzy[żz]enie\s+ps[óo]w)\b",
+    re.IGNORECASE,
+)
+
 EMAIL_RE = re.compile(r"[\w.!#$%&'*+/=?^`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+", re.I | re.ASCII)
 
 PLATFORM_DOMAINS = frozenset({
-    "booksy.com", "fresha.com", "facebook.com", "fb.com", "instagram.com", "tiktok.com",
+    "booksy.com", "booksy.net", "fresha.com", "freshastatus.com", "facebook.com", "fb.com", "instagram.com", "tiktok.com",
     "google.com", "maps.app.goo.gl", "linktr.ee", "wixsite.com", "wordpress.com",
     "business.site", "goo.gl", "youtube.com", "linkedin.com", "znanylekarz.pl",
-    "panoramafirm.pl", "pkt.pl", "fixly.pl", "oferteo.pl", "firmy.net",
+    "panoramafirm.pl", "pkt.pl", "fixly.pl", "oferteo.pl", "firmy.net", "aleo.com",
 })
 
 FREE_EMAIL_DOMAINS = frozenset({
@@ -503,7 +584,10 @@ NON_ICP_PATTERNS = re.compile(
     r"pralni\w*\s+chemiczn\w*|pralni\w*\s+przemyslow\w*|multiwash|"
     r"software\s+house|agencj\w*\s+(?:interaktywn\w*|marketingow\w*|seo|reklamow\w*)|"
     r"tworzeni\w*\s+stron|website\s+builder|hosting\w*|rejestracj\w*\s+domen|"
-    r"spedycj\w*|transport\s+miedzynarodow\w*|hurtowni\w*\s+stali"
+    r"spedycj\w*|transport\s+miedzynarodow\w*|hurtowni\w*\s+stali|"
+    r"erotic\s+massage|masa[żz]\w*\s+erotyczn\w*|nuru\s+massage|masa[żz]\s+nuru|body\s+to\s+body|"
+    r"producent\w*\s+saun\w*|budow\w*\s+saun\w*|sprzeda[żz]\s+(?:saun|wanien\s+spa)|"
+    r"hydromasa[żz]e|sauny,\s*[łl]a[źz]nie,\s*kominki|kominki"
     r")\b",
     re.IGNORECASE,
 )
@@ -511,6 +595,7 @@ NON_ICP_PATTERNS = re.compile(
 NON_ICP_DOMAINS = frozenset({
     "wenet.pl", "bowwe.com", "webador.com", "domena.pl", "multiwash.pl",
     "home.pl", "nazwa.pl", "cyberfolks.pl", "ovh.pl", "unionalpha.com",
+    "hydromasaze.com",
 })
 
 CORE_VENUE_GUARD_RE = re.compile(
@@ -521,6 +606,11 @@ CORE_VENUE_GUARD_RE = re.compile(
 )
 
 AUTO_WASH_RE = re.compile(r"\b(auto[\s\-]*spa|car[\s\-]*spa|detailing|myjni\w*)\b", re.IGNORECASE)
+HARD_NON_ICP_RE = re.compile(
+    r"\b(erotic\s+massage|masa[żz]\w*\s+erotyczn\w*|nuru\s+massage|masa[żz]\s+nuru|body\s+to\s+body|"
+    r"producent\w*\s+saun\w*|budow\w*\s+saun\w*|hydromasa[żz]e|kominki)\b",
+    re.IGNORECASE,
+)
 
 
 # ─── Funkcje pomocnicze i klasyfikacja ──────────────────────────────────────
@@ -594,13 +684,16 @@ def extract_emails(text: str, rejected_log: list[dict[str, str]] | None = None) 
 
 
 def is_non_icp_business(name: str = "", website: str = "", raw_industry: str = "") -> tuple[bool, str]:
-    """Wykrywa firmy spoza docelowego ICP SoundYou (np. Auto SPA / detailing, agencje IT/SEO, pralnie)."""
+    """Wykrywa firmy spoza docelowego ICP SoundYou (np. Auto SPA / detailing, erotyka, producenci saun, agencje IT/SEO, pralnie)."""
     dom = business_domain(website)
     if dom in NON_ICP_DOMAINS:
         return True, f"non_icp_domain:{dom}"
     blob = f"{name or ''} {dom} {raw_industry or ''}".strip()
     if AUTO_WASH_RE.search(blob):
         return True, "auto_wash_or_detailing"
+    m_hard = HARD_NON_ICP_RE.search(blob)
+    if m_hard:
+        return True, f"hard_non_icp:{m_hard.group(0).lower()}"
     m = NON_ICP_PATTERNS.search(blob)
     if m and not CORE_VENUE_GUARD_RE.search(name or ""):
         return True, f"non_icp_keyword:{m.group(0).lower()}"
@@ -1028,6 +1121,9 @@ def classify_soundyou_industries(
     # 2. Wzbogacenie z nazwy firmy i domeny (wykorzystuje zalety multiselect)
     signal_text = f"{name or ''} {website or ''}".strip()
     if signal_text:
+        # Ochrona przed pomyleniem psich salonów/groomerów z ludzkim SPA/fryzjerem
+        if _PET_GROOMING_RE.search(signal_text):
+            return ["Lokal Usługowy / Inne"]
         for industry, pattern in _SIGNAL_PATTERNS:
             if pattern.search(signal_text):
                 matched.add(industry)

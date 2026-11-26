@@ -66,7 +66,8 @@ class TestSaveToCsv:
         save_to_csv(SAMPLE_DATA, path)
         with open(path, newline="", encoding="utf-8") as f:
             rows = list(csv.reader(f))
-        names = [r[0] for r in rows[1:]]
+        name_idx = rows[0].index("Name")
+        names = [r[name_idx] for r in rows[1:]]
         assert "Salon Wellness" in names
 
     def test_csv_email1_written(self, tmp_path):
