@@ -1,0 +1,96 @@
+name: SoundYou CRM Sync (Resend & Supabase -> Attio)
+
+on:
+  # Harmonogram UTC:
+  # - 07:00 UTC (08:00 CET / 09:00 CEST) — poranna synchronizacja Resend -> Attio + bezpiecznik Supabase -> Attio
+  # - 17:00 UTC (18:00 CET / 19:00 CEST) — popołudniowa synchronizacja Resend -> Attio
+  schedule:
+    - cron: "0 7 * * *"
+    - cron: "0 17 * * *"
+
+  # Ręczne uruchomienie z zakładki Actions ("Run workflow")
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Tryb podglądu (--dry-run, zero zapisów do Attio)"
+        required: false
+        default: false
+        type: boolean
+      sync_resend:
+        description: "Uruchom pętlę Resend -> Attio (resend_attio_sync.py)"
+        required: false
+        default: true
+        type: boolean
+      sync_supabase:
+        description: "Uruchom bezpiecznik Supabase -> Attio (supabase_attio_sync.py)"
+        required: false
+        default: true
+        type: boolean
+      include_demo_plays:
+        description: "W Supabase uwzględnij również tabelę demo_plays"
+        required: false
+        default: true
+        type: boolean
+
+concurrency:
+  group: soundyou-attio-crm-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync-attio:
+    name: Synchronizacja z Attio CRM
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repozytorium
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.12 (stdlib — bez ciężkich zależności scrapingu)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Krok 3 — Synchronizacja Resend -> Attio (otwarcia, kliknięcia, DNC, Status leada)
+        if: ${{ github.event_name == 'schedule' || inputs.sync_resend == true }}
+        env:
+          ATTIO_API_KEY: ${{ secrets.ATTIO_API_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          RESEND_AUDIENCE_ID: ${{ secrets.RESEND_AUDIENCE_ID }}
+          DRY_RUN: ${{ inputs.dry_run == true && '--dry-run' || '' }}
+        run: |
+          if [ -z "$ATTIO_API_KEY" ] || [ -z "$RESEND_API_KEY" ]; then
+            echo "::error::Brak sekretów ATTIO_API_KEY lub RESEND_API_KEY w GitHub Actions Secrets."
+            exit 1
+          fi
+          python resend_attio_sync.py $DRY_RUN
+
+      - name: Krok 6b — Nocny/poranny bezpiecznik Supabase (READ-ONLY) -> Attio
+        if: >-
+          (github.event_name == 'schedule' && github.event.schedule == '0 7 * * *') ||
+          (github.event_name == 'workflow_dispatch' && inputs.sync_supabase == true)
+        env:
+          ATTIO_API_KEY: ${{ secrets.ATTIO_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          DRY_RUN: ${{ inputs.dry_run == true && '--dry-run' || '' }}
+          DEMO_FLAG: ${{ (github.event_name == 'schedule' || inputs.include_demo_plays == true) && '--include-demo-plays' || '' }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
+            echo "::warning::Pominięto bezpiecznik Supabase -> Attio (brak SUPABASE_URL lub SUPABASE_SERVICE_ROLE_KEY w GitHub Secrets)."
+            exit 0
+          fi
+          python supabase_attio_sync.py $DRY_RUN $DEMO_FLAG
+
+      - name: Archiwizacja raportów JSON jako artefakt przebiegu (14 dni)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: attio-sync-reports-${{ github.run_number }}
+          path: |
+            logs/*_sync_*.json
+          if-no-files-found: ignore
+          retention-days: 14

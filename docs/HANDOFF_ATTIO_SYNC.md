@@ -155,3 +155,36 @@ Wszystkie komendy uruchamiamy z katalogu `C:\IdeaMusicPro\Web-Crunchy-Scrap\Scra
    ```powershell
    .\.venv\Scripts\python.exe -m pytest -q tests\test_attio_sync.py tests\test_resend_attio_sync.py tests\test_attio_resend_export.py tests\test_supabase_attio_sync.py tests\test_resend_sender.py tests\test_pure_logic.py tests\test_merge_dedup.py
    ```
+
+---
+
+## 6. Automatyzacja 100% Remote (Hybryda: Supabase Event-Driven + GitHub Actions)
+
+Docelowy model pracy działa w 100% zdalnie (24/7, bez włączonego komputera lokalnego) i oszczędza limity Supabase:
+
+1. **Rejestracje, Demo i Subskrypcje (`WEBPlayerPV → Attio`, Event-Driven w Supabase):**
+   - W projekcie `WEBPlayerPV` Edge Function `sync-crm` (`supabase/functions/sync-crm` + `_shared/crm-provider.ts`) wyzwalana przez kolejkę `crm_sync_outbox` aktualizuje w Attio:
+     - `Status leada` (`Rozmowa / Demo` → `Trial SoundYou` → `Klient`, jednokierunkowo bez cofania `Klient`),
+     - `Branża SoundYou` (`soundyou_industry` — tylko gdy pole w Attio jest puste),
+     - `Partia importu` (`SoundYou App (Supabase)` dla nowych firm),
+     - firmy rejestrujące się na darmowych skrzynkach (`@gmail.com`, `@wp.pl` itd.) — zarówno dopasowując istniejące rekordy przez powiązanie `People → company` / nazwę firmy, jak i tworząc nowe rekordy dla rejestracji organicznych.
+   - Gdy brak nowych zdarzeń w aplikacji, `crm_internal.dispatch()` kończy pracę w Postgresie i wykonuje **0 wywołań Edge Function**.
+
+2. **Pętla zwrotna kampanii `Resend → Attio` + poranny bezpiecznik Supabase (GitHub Actions):**
+   - Plik [`.github/workflows/sync-crm.yml`](../.github/workflows/sync-crm.yml) uruchamia się automatycznie **2x dziennie** (`07:00 UTC` oraz `17:00 UTC`) oraz na żądanie przez przycisk **Run workflow** (z opcjami `dry_run`, `sync_resend`, `sync_supabase`, `include_demo_plays`).
+   - Korzysta wyłącznie ze standardowej biblioteki Pythona 3.12 (czas wykonania ~15–25 s, zużycie ~15–30 min/mies. z darmowych 2000 min GitHub Actions).
+   - Zapisuje raporty `logs/*_sync_*.json` jako artefakty przebiegu (14 dni retencji).
+
+### Wymagane sekrety do skonfigurowania ręcznie
+
+- **W GitHub (`Settings → Secrets and variables → Actions → New repository secret` w repo `Scraper`):**
+  - `ATTIO_API_KEY`
+  - `RESEND_API_KEY`
+  - `RESEND_AUDIENCE_ID`
+  - `SUPABASE_URL`
+  - `SUPABASE_SERVICE_ROLE_KEY`
+  - *(Ważne: harmonogram `on: schedule` w GitHub Actions aktywuje się po zmergowaniu gałęzi `dev` do domyślnej gałęzi `main` lub ustawieniu `dev` jako domyślnej gałęzi repozytorium.)*
+
+- **W Supabase (`WEBPlayerPV` — dla natychmiastowego syncu rejestracji i Stripe):**
+  - **Edge Function Secrets (`sync-crm`):** `CRM_PROVIDER=attio`, `ATTIO_API_KEY=<klucz>`, `ATTIO_WORKSPACE_SLUG=soundyou`
+  - **Supabase Vault:** sekret `crm_sync_enabled` ustawiony na `true` (oraz `crm_sync_project_url` i `service_role_key`).
