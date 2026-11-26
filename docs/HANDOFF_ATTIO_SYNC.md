@@ -167,27 +167,40 @@ Docelowy model pracy działa w 100% zdalnie (24/7, bez włączonego komputera lo
 
 1. **Rejestracje, Demo i Subskrypcje (`WEBPlayerPV → Attio`, Event-Driven w Supabase):**
    - W projekcie `WEBPlayerPV` Edge Function `sync-crm` (`supabase/functions/sync-crm` + `_shared/crm-provider.ts`) wyzwalana przez kolejkę `crm_sync_outbox` aktualizuje w Attio:
-     - `Status leada` (`Rozmowa / Demo` → `Trial SoundYou` → `Klient`, jednokierunkowo bez cofania `Klient`),
+     - `Status leada` (`Rozmowa / Demo` → `Trial SoundYou` → `Klient` ↔ `Były klient`, bez cofania klienta do `Trial`),
+     - `Plan SoundYou` (`soundyou_plan`) i `Subskrypcja do` (`soundyou_valid_until`),
      - `Branża SoundYou` (`soundyou_industry` — tylko gdy pole w Attio jest puste),
      - `Partia importu` (`SoundYou App (Supabase)` dla nowych firm),
-     - firmy rejestrujące się na darmowych skrzynkach (`@gmail.com`, `@wp.pl` itd.) — zarówno dopasowując istniejące rekordy przez powiązanie `People → company` / nazwę firmy, jak i tworząc nowe rekordy dla rejestracji organicznych.
+     - `resend_unsubscribed` przy `marketing_opt_out = true`,
+     - firmy rejestrujące się na darmowych skrzynkach (`@gmail.com`, `@wp.pl` itd.) — dopasowując istniejące rekordy przez powiązanie `People → company` / nazwę firmy albo tworząc nowe rekordy dla rejestracji organicznych.
    - Gdy brak nowych zdarzeń w aplikacji, `crm_internal.dispatch()` kończy pracę w Postgresie i wykonuje **0 wywołań Edge Function**.
 
 2. **Pętla zwrotna kampanii `Resend → Attio` + poranny bezpiecznik Supabase (GitHub Actions):**
-   - Plik [`.github/workflows/sync-crm.yml`](../.github/workflows/sync-crm.yml) uruchamia się automatycznie **2x dziennie** (`07:00 UTC` oraz `17:00 UTC`) oraz na żądanie przez przycisk **Run workflow** (z opcjami `dry_run`, `sync_resend`, `sync_supabase`, `include_demo_plays`).
+   - Plik [`.github/workflows/sync-crm.yml`](../.github/workflows/sync-crm.yml) (zmergowany na domyślną gałąź `main`) uruchamia się automatycznie **2x dziennie** (`07:00 UTC` oraz `17:00 UTC`) oraz na żądanie przez przycisk **Run workflow** (z opcjami `dry_run`, `sync_resend`, `sync_supabase`, `include_demo_plays`).
+   - Obsługuje nowy globalny endpoint Resend **`GET /contacts`** (oraz `POST /contacts` w `resend_sender.py`) bez potrzeby podawania `RESEND_AUDIENCE_ID`.
    - Korzysta wyłącznie ze standardowej biblioteki Pythona 3.12 (czas wykonania ~15–25 s, zużycie ~15–30 min/mies. z darmowych 2000 min GitHub Actions).
    - Zapisuje raporty `logs/*_sync_*.json` jako artefakty przebiegu (14 dni retencji).
 
-### Wymagane sekrety do skonfigurowania ręcznie
+### Wymagane sekrety do skonfigurowania ręcznie (aktywacja produkcyjna)
 
-- **W GitHub (`Settings → Secrets and variables → Actions → New repository secret` w repo `Scraper`):**
+- **W GitHub (`Scraper → Settings → Secrets and variables → Actions → Repository secrets`):**
   - `ATTIO_API_KEY`
   - `RESEND_API_KEY`
-  - `RESEND_AUDIENCE_ID`
   - `SUPABASE_URL`
   - `SUPABASE_SERVICE_ROLE_KEY`
-  - *(Ważne: harmonogram `on: schedule` w GitHub Actions aktywuje się po zmergowaniu gałęzi `dev` do domyślnej gałęzi `main` lub ustawieniu `dev` jako domyślnej gałęzi repozytorium.)*
+  - *(Opcjonalnie: `RESEND_AUDIENCE_ID` nie jest już wymagane — przy jego braku skrypt korzysta z globalnego `GET /contacts`.)*
 
 - **W Supabase (`WEBPlayerPV` — dla natychmiastowego syncu rejestracji i Stripe):**
-  - **Edge Function Secrets (`sync-crm`):** `CRM_PROVIDER=attio`, `ATTIO_API_KEY=<klucz>`, `ATTIO_WORKSPACE_SLUG=soundyou`
-  - **Supabase Vault:** sekret `crm_sync_enabled` ustawiony na `true` (oraz `crm_sync_project_url` i `service_role_key`).
+  - Wdrożyć samą funkcję: `supabase functions deploy sync-crm` *(bez `supabase db push`!)*.
+  - **Edge Function Secrets (`sync-crm`):** `CRM_PROVIDER=attio`, `ATTIO_API_KEY=<klucz>`, `ATTIO_WORKSPACE_SLUG=soundyou`.
+  - **Supabase Vault:** sekret `crm_sync_enabled` = `true` (oraz `crm_sync_project_url` i `service_role_key`).
+
+---
+
+## 7. Powiązana dokumentacja i grafiki (Cross-Repo)
+
+- **Grafiki architektury workflow (PNG):** [soundyou_workflow.png](./soundyou_workflow.png) (PL) · [soundyou_workflow_en.png](./soundyou_workflow_en.png) (EN)
+- **Dokumentacja aplikacji odtwarzacza (`WEBPlayerPV`):**
+  - [WEBPlayerPV `README.md`](https://github.com/ksywa812/WEBPlayerPV/blob/main/README.md) (sekcja *Integracja CRM & Lead-Gen*)
+  - [WEBPlayerPV `docs/admin-dashboard-crm-handoff-2026-11-25.md`](https://github.com/ksywa812/WEBPlayerPV/blob/main/docs/admin-dashboard-crm-handoff-2026-11-25.md) (szczegóły kolejki `crm_sync_outbox`, migracji i panelu admina)
+  - [WEBPlayerPV `supabase/functions/_shared/crm-provider.ts`](https://github.com/ksywa812/WEBPlayerPV/blob/main/supabase/functions/_shared/crm-provider.ts) (natywny adapter `AttioCrmAdapter`)
