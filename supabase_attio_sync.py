@@ -564,9 +564,6 @@ def sync_supabase_to_attio(
                     f"Źródło: SoundYou App (Supabase) | E-mail: {email} | "
                     f"Plan: {raw_plan_display or 'Trial'}"
                 ),
-                "primary_location": {
-                    "country_code": _normalize_country_code(prof.get("country")),
-                },
             }
             if raw_plan_display:
                 comp_values[SOUNDYOU_PLAN_SLUG] = raw_plan_display
