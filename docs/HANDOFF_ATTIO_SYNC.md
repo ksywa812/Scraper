@@ -1,113 +1,157 @@
-# Handoff: Integracja Web-Crunchy-Scrap CSV → Attio CRM (Branże SoundYou, Deduplikacja, Social Media, Auto-Nazwa & Quality Gate)
+# Handoff: Kompletny Workflow Lead-Gen & CRM SoundYou (`Scraper ↔ Attio CRM ↔ Resend ↔ Supabase`)
 
-**Data:** 2026-11-25  
-**Zakres:** Kompletny workflow `Scraper → Quality Gate & CSV → Attio CRM` obejmujący:
-- 12 kanonicznych branż SoundYou (`soundyou_industry`, multiselect, mapowanie EN ↔ PL),
-- ścisłą deduplikację po stronie skryptu (6 sygnałów, istniejące rekordy w Attio są pomijane),
-- automatyczne zbieranie linków **Facebook** i **Instagram** oraz osobne kolumny w Attio,
-- samodzielne rozpoznawanie nazwy firmy (`resolve_company_name`) przy braku/niejasnej nazwie,
-- **Krok A:** pipeline sprzedażowy **`Status leada`** (`lead_status` + widok Kanban), **`Partia importu`** (`lead_batch`) i ustrukturyzowane raporty JSON z każdego przebiegu (`logs/attio_sync_*.json`),
-- **Krok B:** bramę jakości e-maili (literówki TLD np. `.coml`/`.pll`, domeny jednorazowe, weryfikacja MX/disposable w **UserCheck API** ze współdzielonym cache oraz tarcza **DNC** z Attio) i filtr **anty-ICP** (odrzucanie Auto SPA, pralni, agencji IT/SEO/hostingów),
-- **Krok 4 (Krok D):** opcjonalny tryb **`--fill-missing`** (*fill-blanks-only*) — bezpieczne uzupełnianie wyłącznie pustych pól (brakującej strony WWW, Instagrama, Facebooka, branży, lokalizacji, telefonu oraz nowo odkrytych adresów e-mail jako `People`) na firmach już istniejących w Attio, **bez nadpisywania jakichkolwiek istniejących wartości**.
+**Data aktualizacji:** 2026-11-26  
+**Zakres:** Domknięty, dwukierunkowy ekosystem pozyskiwania leadów, wysyłek kampanii i synchronizacji konwersji produktowej SoundYou:
+- **12 kanonicznych branż SoundYou** (`soundyou_industry`, multiselect, mapowanie EN ↔ PL + pełna zgodność z dropdownem aplikacji `WEBPlayerPV`),
+- **Ścisła 6-sygnałowa deduplikacja** po stronie skryptu (domyślnie „istnieje = pomiń”),
+- **Automatyczne zbieranie Facebook & Instagram** oraz samodzielne rozpoznawanie nazwy firmy (`resolve_company_name`),
+- **Krok 1 (Krok A):** pipeline sprzedażowy **`Status leada`** (`lead_status` + widok Kanban), **`Partia importu`** (`lead_batch`) i raporty JSON z każdego przebiegu (`logs/*.json`),
+- **Krok 2 (Krok B):** brama jakości e-maili (literówki TLD `.coml`/`.pll`, domeny jednorazowe, weryfikacja MX/disposable w **UserCheck API** ze współdzielonym cache, tarcza **DNC** z Attio) i filtr **anty-ICP** (Auto SPA, pralnie, agencje IT/SEO/hosting),
+- **Krok 3 (`resend_attio_sync.py`):** automatyczna pętla zwrotna **`Resend → Attio`** (synchronizacja wysyłek do `resend_promotional_sends` bez duplikowania historycznych 857 rekordów, przeliczanie 6 pól podsumowujących `resend_*` na `People` i `Companies`, obsługa wypisań z Audience oraz automatyczny awans `lead_status` do `Wysłano kampanię` / `Zainteresowany` / `Odrzucony / DNC` z ochroną wyższych etapów),
+- **Krok 4 (`--fill-missing`):** bezpieczny tryb *fill-blanks-only* (dopisuje wyłącznie puste pola na istniejących rekordach w Attio bez nadpisywania jakichkolwiek wartości),
+- **Krok 6a (`attio_resend_export.py` + `resend_sender.py --from-attio`):** eksport odbiorców kampanii **`Attio → Resend`** z filtrami branży, twardym wykluczeniem DNC, klientów/triali (`Trial SoundYou`, `Klient`, `Rozmowa / Demo`, `Odrzucony / DNC`), okresu karencji (`--cooldown-days`, domyślnie 30 dni) i limitem kontaktów na firmę (`--max-per-company`, domyślnie 2),
+- **Krok 6b (`supabase_attio_sync.py`):** bezpieczna synchronizacja **READ-ONLY** **`SoundYou Supabase (WEBPlayerPV) → Attio`** oznaczająca konta `Trial SoundYou` i płatnych `Klient` (również dla salonów na `@gmail.com`/`@wp.pl` powiązanych przez `People`), synchronizująca `marketing_opt_out` i opcjonalnie `demo_plays` (`Rozmowa / Demo`), bez ryzyka cofnięcia statusu `Klient`.
 
 ---
 
-## 1. Stan docelowy w Attio (zweryfikowany na żywo przez MCP)
+## 1. Architektura przepływu end-to-end
 
-- **Workspace:** SoundYou (`soundyou`)
+```text
+[Google Maps / Booksy / WWW]
+           │
+           ▼  (1) scraper.py  ──► data/Raport/SoundYouLeads.csv
+           │
+           ▼  (2) attio_sync.py (6-sygnałowy dedup, UserCheck MX, anty-ICP, --fill-missing)
+           │
+     ┌─────┴───────────────────────────────────────────┐
+     ▼                                                 │
+[ Attio CRM — Single Source of Truth ]                 │
+  • Companies (Branża SoundYou, Status leada, Kanban)  │
+  • People (e-maile, telefony, flagi DNC / Resend)     │
+  • Resend Promotional Sends (historia kampanii)       │
+     │                                                 ▲
+     │ (6a) attio_resend_export.py                     │ (3) resend_attio_sync.py
+     │      lub resend_sender.py --from-attio          │     (otwarcia, kliknięcia, DNC,
+     ▼      (filtr branży, DNC, cooldown 30d, Trial)   │      awans -> Wysłano / Zainteresowany)
+[ Resend Audience / Kampanie e-mail ] ─────────────────┘
+                                                       ▲
+[ Aplikacja SoundYou — Supabase WEBPlayerPV ] ─────────┘
+  • GET /rest/v1/profiles (READ-ONLY)            (6b) supabase_attio_sync.py
+  • GET /rest/v1/demo_plays (opcjonalnie)             (awans -> Trial SoundYou / Klient)
+```
+
+---
+
+## 2. Stan docelowy w Attio (zweryfikowany w workspace `soundyou`)
+
 - **Atrybuty na `Companies`:**
-  - `Branża SoundYou` (`soundyou_industry`, typ `select`, `is_multiselect: true`, 12 opcji)
-  - `Status leada` (`lead_status`, typ `status`, opcje: `Nowy` → `Gotowy do kampanii` → `Wysłano kampanię` → `Zainteresowany` → `Rozmowa / Demo` → `Trial SoundYou` → `Klient` / `Odrzucony / DNC`)
-  - `Partia importu` (`lead_batch`, typ `text`, np. `2026-11-25 | kawiarnia-wroclaw`)
-  - Osobne kolumny kontaktowe/social we wszystkich 18 widokach tabelarycznych (`Companies` i `People`): **Nazwa firmy**, **Strona WWW** (`domains`), **Instagram** (`instagram`), **Facebook** (`facebook`), **Branża SoundYou** (`soundyou_industry`).
-- **Widok Kanban:** `Pipeline — Status leada (Kanban)` (grupowany po `lead_status`).
-- **8 dedykowanych widoków branżowych w `Companies`:**
-  1. `Branża — SPA & Wellness`
-  2. `Branża — Kobido & Masaż`
-  3. `Branża — Beauty / Salon Urody`
-  4. `Branża — Hotele i Pensjonaty`
-  5. `Branża — Restauracje i Kawiarnie`
-  6. `Branża — Fitness / Joga / Pilates`
-  7. `Branża — Fryzjer / Barber`
-  8. `Branża — Gabinety / Sklepy / Inne`
-- **6 widoków kampanijnych Resend (`People` + `Companies`):** kliknięcia (follow-up), otwarcia bez kliknięcia, odbicia (`bounced` / `suppressed`).
+  - `Branża SoundYou` (`soundyou_industry`, `select`, `is_multiselect: true`, 12 opcji)
+  - `Status leada` (`lead_status`, `status`: `Nowy` → `Gotowy do kampanii` → `Wysłano kampanię` → `Zainteresowany` → `Rozmowa / Demo` → `Trial SoundYou` → `Klient` / `Odrzucony / DNC`)
+  - `Partia importu` (`lead_batch`, `text`, np. `2026-11-25 | kawiarnia-wroclaw` lub `SoundYou App (Supabase)`)
+  - 6 pól podsumowujących kampanie Resend (`resend_last_sent_at`, `resend_last_campaign`, `resend_last_delivery_status`, `resend_any_opened`, `resend_any_clicked`, `resend_sends_count`) — dostępne identycznie na `People` i `Companies`.
+  - Osobne kolumny kontaktowe/social we wszystkich 18 widokach tabelarycznych (`Companies` i `People`): **Nazwa firmy**, **Strona WWW** (`domains`), **Instagram** (`instagram`), **Facebook** (`facebook`), **Branża SoundYou**, **Status leada**, **Partia importu**.
+- **Widoki w Attio:**
+  - 1 widok Kanban: `Pipeline — Status leada (Kanban)`
+  - 8 widoków branżowych na `Companies` (`Branża — SPA & Wellness`, `Kobido & Masaż`, `Beauty / Salon Urody`, `Hotele i Pensjonaty`, `Restauracje i Kawiarnie`, `Fitness / Joga / Pilates`, `Fryzjer / Barber`, `Gabinety / Sklepy / Inne`)
+  - 6 widoków follow-up Resend (`People` + `Companies`: kliknięcia, otwarcia bez kliknięcia, odbicia).
 
 ---
 
-## 2. Docelowy workflow (`Scraper → Quality Gate & CSV → Attio`)
+## 3. Szczegółowy opis modułów i kroków
 
-1. **Etap 1 — Scraping, wzbogacenie i filtr jakości do `.csv` (`scraper.py`):**
-   - Zbiera dane kontaktowe, adresy e-mail, linki **Facebook** i **Instagram** (ze stron WWW `<a href>`, JSON-LD `sameAs` i profili Booksy `__NUXT__`, z wykluczeniem kont katalogów) oraz tytuł marki (`og:site_name` / JSON-LD `name` / `<title>`).
-   - Automatycznie ustala nazwę firmy (`resolve_company_name`), jeśli nazwa ze scrapingu jest pusta lub niejasna.
-   - Odrzuca błędne e-maile (w tym literówki TLD typu `.coml`, `.pll`, obrazy i domeny jednorazowe) oraz firmy spoza ICP (`is_non_icp_business`).
-   - Zapisuje unikalne rekordy do `data/Raport/SoundYouLeads.csv` (z kolumnami `Facebook` i `Instagram`).
+### Krok 1, 2 i 4 — Scraping, Quality Gate, Deduplikacja i `--fill-missing` (`scraper.py`, `attio_sync.py`)
+- **6-sygnałowa deduplikacja względem Attio:** domena WWW (`companies_by_domain`), linki FB/IG (`companies_by_social`), e-mail (`companies_by_email`, `people_by_email`), telefon E.164 (`+48...`), `(nazwa, miasto)` / `(nazwa, kod pocztowy)` oraz unikalna nazwa firmy (≥ 5 znaków).
+- **Domyślna zasada „istnieje = pomiń”:** istniejące w Attio firmy nie są nadpisywane ani duplikowane (`0` zapisów).
+- **Tryb `--fill-missing` (*fill-blanks-only*):** dopisuje wyłącznie puste pola (`domains`, `instagram`, `facebook`, `soundyou_industry`, `primary_location`, brakujący `phone_numbers` i nowo odkryte adresy e-mail jako `People`), logując zmiany w `audit.filled_missing_companies`.
+- **Brama dostarczalności i anty-ICP:** odrzuca literówki TLD (`.coml`, `.con`, `.pll`), domeny jednorazowe, rekordy z listy DNC w Attio, weryfikuje MX przez **UserCheck API** (cache w `data/Raport/email_verify_cache.json`) i odfiltrowuje firmy spoza ICP (`is_non_icp_business`).
+- **Auto-nazwa (`resolve_company_name`):** kolejno z `site_title` (`og:site_name` / JSON-LD / `<title>`), slugu profilu FB/IG, domeny WWW, domeny lub prefiksu e-maila.
 
-2. **Etap 2 — Bramka jakości, ścisła deduplikacja i zapis do Attio (`attio_sync.py`):**
-   - **Lokalna deduplikacja CSV + filtr anty-ICP:** odrzuca rekordy spoza ICP (`skipped_non_icp`, wyłączalne przez `--include-non-icp`), scala wewnętrzne duplikaty i loguje wszystkie automatycznie wywnioskowane nazwy (`audit.inferred_names`).
-   - **6-sygnałowa deduplikacja względem Attio:** sprawdza istniejące rekordy w Attio po:
-     1. domenie firmowej (`companies_by_domain`),
-     2. linku `facebook` / `instagram` (`companies_by_social`),
-     3. adresie e-mail (`companies_by_email`, `people_by_email`),
-     4. numerze telefonu `+48XXXXXXXXX` (`companies_by_phone`, `people_by_phone`),
-     5. `(nazwa, miasto)` oraz `(nazwa, kod pocztowy)` (`XX-XXX`),
-     6. unikalnej nazwie firmy w Attio (≥ 5 znaków).
-   - **Zasada „istnieje = pomiń” (`fill_missing=False`, `enrich_existing=False` domyślnie):** rekordy istniejące w Attio są całkowicie pomijane (`0` zapisów `POST`/`PATCH`).
-   - **Opcjonalny tryb `--fill-missing` (*fill-blanks-only*):**
-     - gdy firma już jest w Attio (np. wcześniej dodana z samego telefonu z Google Maps), a kolejny scraping znajdzie jej stronę WWW, Instagrama, Facebooka lub adres e-mail, flaga `--fill-missing` (lub `--attio-fill-missing` w `scraper.py`) dopisze **wyłącznie pola, które w Attio są puste**:
-       - na `Companies`: puste `domains`, `instagram`, `facebook`, `soundyou_industry`, `primary_location` (nigdy nie nadpisuje nazwy, opisu, statusu, partii ani ustawionych już wartości!),
-       - na `People`: tworzy nowe rekordy `People` dla nowo odkrytych adresów e-mail (po przejściu przez bramę DNC + UserCheck) oraz dopisuje brakujące powiązanie `company` lub pusty `phone_numbers` na istniejącym kontakcie,
-       - pełna lista uzupełnionych pól trafia do raportu przebiegu pod kluczem `audit.filled_missing_companies`.
-   - **Brama dostarczalności e-maili dla nowych leadów:**
-     - blokuje adresy z listy **DNC** w Attio (`resend_unsubscribed = true` lub `bounced`/`suppressed`),
-     - weryfikuje nowe adresy przez **UserCheck API** (`mx`, `disposable`, `blocklisted`, `spam`) ze współdzielonym z `resend_sender.py` cache w `data/Raport/email_verify_cache.json` (odpytywane są wyłącznie nowe leady nieistniejące jeszcze w Attio).
-   - ** Automatyczne oznaczanie leada i raport przebiegu:**
-     - każdy nowy rekord `Companies` otrzymuje `lead_status = "Nowy"` oraz `lead_batch` (np. `2026-11-25 | kawiarnia-wroclaw` lub `YYYY-MM-DD | SoundYouLeads`),
-     - po każdym przebiegu zapisywany jest pełny raport JSON w `logs/attio_sync_YYYYMMDD_HHMMSS.json` (statystyki, wywnioskowane nazwy, odrzucone e-maile i odfiltrowane firmy spoza ICP).
+### Krok 3 — Automatyczna pętla zwrotna `Resend → Attio` (`resend_attio_sync.py`)
+- Pobiera wysłane wiadomości z `GET /emails` (z paginacją) oraz wypisania z `GET /audiences/{id}/contacts`.
+- Dopasowuje rekordy `resend_promotional_sends` zarówno po `resend_message_key` (SHA-256), jak i po krotce `(person_id, kampania, data_wysyłki_UTC_co_do_sekundy)`, dzięki czemu **nigdy nie duplikuje historycznych 857 rekordów**.
+- Przelicza i aktualizuje 6 pól `resend_*` na `People` i `Companies` **wyłącznie wtedy, gdy wartości uległy zmianie** (pełna idempotentność przy ponownym uruchomieniu).
+- Automatycznie awansuje `Companies.lead_status`:
+  - kliknięcie w link (`resend_any_clicked = true`) → `Zainteresowany`,
+  - dostarczona wysyłka dla `Nowy` / `Gotowy do kampanii` → `Wysłano kampanię`,
+  - wypisanie wszystkich kontaktów firmy lub same `bounced`/`suppressed` bez otwarć → `Odrzucony / DNC`,
+  - **twarda ochrona wyższych etapów:** nigdy nie nadpisuje ani nie cofa `Rozmowa / Demo`, `Trial SoundYou`, `Klient`.
 
----
+### Krok 6a — Eksport odbiorców kampanii `Attio → Resend` (`attio_resend_export.py`, `resend_sender.py`)
+- Buduje czystą listę odbiorców bezpośrednio z Attio CRM zamiast surowego CSV ze scrapera:
+  - filtruje po branży (`--industry`, obsługuje polskie nazwy kanoniczne i angielskie skróty np. `spa`, `hotel`, `kawiarnia`),
+  - twardo wyklucza etapy `Trial SoundYou`, `Klient`, `Rozmowa / Demo`, `Odrzucony / DNC` (lub przyjmuje własną białą listę `--allowed-statuses`),
+  - blokuje kontakty z `resend_unsubscribed = true`, statusem `bounced`/`suppressed`, błędną składnią lub spoza ICP,
+  - egzekwuje **okres karencji (`--cooldown-days`, domyślnie 30 dni)** zarówno na poziomie kontaktu (`People`), jak i całej firmy (`Companies`), aby nie wysyłać zbyt częstych kampanii do tego samego lokalu,
+  - ogranicza liczbę skrzynek na jedną firmę (`--max-per-company`, domyślnie 2), priorytetyzując e-maile recepcyjne/kontaktowe (`recepcja@`, `kontakt@`, `biuro@`) przed księgowymi (`faktury@`, `ksiegowosc@`).
+- Zintegrowany bezpośrednio z `resend_sender.py` poprzez flagi `--from-attio`, `--industry` i `--cooldown-days`.
 
-## 3. Automatyczne ustalanie nazwy firmy (`resolve_company_name`)
-
-Gdy nazwa ze scrapingu jest niejasna (`is_unclear_company_name`), skrypt sam wybiera najlepszą nazwę w kolejności priorytetów:
-1. **`site_title`** ze strony WWW (`og:site_name` → JSON-LD `Organization`/`LocalBusiness` `name` → pierwszy niegeneryczny człon `<title>`).
-2. **Nazwa profilu Facebook / Instagram** (np. `facebook.com/SalonUrodyMagnolia-102938475610293` → `Salon Urody Magnolia`, `instagram.com/kobido.studio.krakow` → `Kobido Studio Krakow`).
-3. **Domena strony WWW** (np. `enklawaspa.com` → `Enklawa SPA`, `safari-wellness.pl` → `Safari Wellness`).
-4. **Adres e-mail** — własna domena firmowa (`recepcja@hotelmarta.com.pl` → `Hotel Marta`) lub część przed `@` dla darmowych skrzynek (`yin.studiospa@gmail.com` → `Yin Studio SPA`).
-5. **Fallback:** `Kategoria (Miasto)`.
-
----
-
-## 4. Zakres zmodyfikowanych plików w repozytorium (`Scraper/`)
-
-- **`attio_sync.py`**: pełny pipeline CSV → Attio (`soundyou_industry`, `lead_status`, `lead_batch`, `facebook`, `instagram`, `resolve_company_name`, `validate_email_syntax`, `verify_email_usercheck`, `is_non_icp_business`, tarcza DNC, 6-sygnałowa deduplikacja i raporty JSON w `logs/`).
-- **`scraper.py`**: pełne `CATEGORY_KEYWORDS` / `CATEGORY_PRIORITY`, ekstrakcja social media i `site_title`, `resolve_company_name`, filtr składni e-maili i anty-ICP w `append_to_csv_master`, przekazywanie `lead_batch` przy `--sync-attio`.
-- **`resend_sender.py`**: odrzucanie literówek TLD (np. `.coml`, `.con`, `.pll`) w `is_valid_email`.
-- **`run_scraper.bat`** (oraz `..\run_pipeline.bat`, `..\run_agglomeration.bat`, `..\send_to_attio.bat`): menu 11 branż SoundYou + wpis ręczny, przepływ `Scraper → CSV → Attio`.
-- **`tests/test_attio_sync.py`**: 21 testów jednostkowych obejmujących wszystkie reguły branż, deduplikacji, social media, auto-nazw, `lead_status`/`lead_batch`, UserCheck cache, DNC, filtr anty-ICP i raporty JSON.
+### Krok 6b — Synchronizacja `SoundYou Supabase → Attio` (`supabase_attio_sync.py`)
+- **Ściśle READ-ONLY wobec bazy produkcyjnej `WEBPlayerPV`:** klient `SupabaseReadClient` wykonuje wyłącznie zapytania `GET /rest/v1/profiles` (dla `role=eq.owner` i `parent_profile_id=is.null`) oraz opcjonalnie `GET /rest/v1/demo_plays` — zero operacji zapisu w Supabase.
+- Dopasowuje właścicieli kont SoundYou do Attio w 4 krokach:
+  1. istniejący `Person` po adresie e-mail → jego `company` (**rozpoznaje również salony na `@gmail.com` / `@wp.pl`!**),
+  2. e-mail w opisie firmy (`companies_by_email`),
+  3. domena firmowa e-maila (`companies_by_domain` z wykluczeniem darmowych skrzynek),
+  4. znormalizowana nazwa firmy `business_name`.
+- Reguły statusów (`compute_status_upgrade`):
+  - płatny plan (`plan` różny od pustego / `Trial` / `Free` / `Demo`) → **`Klient`** (najwyższy priorytet — nigdy nie jest cofany do `Trial SoundYou` ani `Odrzucony / DNC`),
+  - okres próbny (`plan = 'Trial'`, `onboarding_completed = true` lub `stripe_customer_id`) → **`Trial SoundYou`**,
+  - `marketing_opt_out = true` → ustawia `resend_unsubscribed = true` na `People` (oraz `Odrzucony / DNC` na firmie, o ile nie jest w `Rozmowa / Demo` / `Trial SoundYou` / `Klient`),
+  - `--include-demo-plays` → awansuje dopasowane firmy z wczesnych etapów do **`Rozmowa / Demo`**.
+- Dopisuje `soundyou_industry` z dropdownu aplikacji SoundYou (w tym `Studio Jogi` → `Joga / Pilates / Medytacja`) wyłącznie wtedy, gdy pole branży w Attio jest puste, a dla organicznych rejestracji tworzy brakujące `Company` + `Person` z partią `SoundYou App (Supabase)` (można wyłączyć przez `--no-create-missing`).
 
 ---
 
-## 5. Jak uruchomić
+## 4. Konfiguracja `.env` (`Scraper/.env`)
 
-1. Podgląd offline (bez sieci, z zapisem raportu audytowego w `logs/`):
+```ini
+GOOGLE_MAPS_API_KEY=your_google_maps_api_key_here
+RESEND_API_KEY=your_resend_api_key_here
+RESEND_AUDIENCE_ID=your_resend_audience_id_here
+USERCHECK_API_KEY=uc_your_api_key_here
+ATTIO_API_KEY=your_attio_api_key_here
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key_here
+```
+
+---
+
+## 5. Ściąga uruchomieniowa (CLI oraz gotowe skrypty `.bat`)
+
+Wszystkie komendy uruchamiamy z katalogu `C:\IdeaMusicPro\Web-Crunchy-Scrap\Scraper` (lub dwuklikiem z nadrzędnego katalogu `C:\IdeaMusicPro\Web-Crunchy-Scrap\*.bat`):
+
+1. **Import nowych leadów z CSV do Attio (`attio_sync.py` / `..\sync_to_attio.bat`):**
    ```powershell
    .\.venv\Scripts\python.exe attio_sync.py --offline-dry-run
-   ```
-2. Podgląd względem żywej bazy Attio (tylko odczyt, 0 zapisów):
-   ```powershell
    .\.venv\Scripts\python.exe attio_sync.py --dry-run
+   .\.venv\Scripts\python.exe attio_sync.py --batch "2026-11-26 | SoundYouLeads"
+   .\.venv\Scripts\python.exe attio_sync.py --fill-missing --dry-run
    ```
-3. Uzupełnienie wyłącznie nowych leadów w Attio (istniejące zostaną pominięte):
+
+2. **Synchronizacja wyników kampanii `Resend → Attio` (`resend_attio_sync.py` / `..\sync_resend_to_attio.bat`):**
    ```powershell
-   .\.venv\Scripts\python.exe attio_sync.py --batch "2026-11-25 | SoundYouLeads"
+   .\.venv\Scripts\python.exe resend_attio_sync.py --dry-run
+   .\.venv\Scripts\python.exe resend_attio_sync.py
    ```
-4. Tryb *fill-blanks-only* (dodaj nowe leady + uzupełnij wyłącznie puste pola WWW/IG/FB/nowe e-maile na istniejących firmach, bez nadpisywania):
+
+3. **Synchronizacja kont Trial i Klient `Supabase → Attio` (`supabase_attio_sync.py` / `..\sync_supabase_to_attio.bat`):**
    ```powershell
-   .\.venv\Scripts\python.exe attio_sync.py --fill-missing
+   .\.venv\Scripts\python.exe supabase_attio_sync.py --dry-run
+   .\.venv\Scripts\python.exe supabase_attio_sync.py --include-demo-plays
    ```
-   *(lub podgląd bez zapisu: `python attio_sync.py --fill-missing --dry-run`)*
-5. Pełny scraping nowej branży/miasta z zapisem do CSV i Attio:
+
+4. **Eksport odbiorców z Attio do kampanii Resend (`attio_resend_export.py` / `resend_sender.py` / `..\export_attio_to_resend.bat`):**
    ```powershell
-   .\.venv\Scripts\python.exe scraper.py --query kawiarnia --location Wroclaw --emails --use-google --sync-attio
+   # Podgląd i eksport CSV czystych odbiorców dla wybranych branż (cooldown 30 dni):
+   .\.venv\Scripts\python.exe attio_resend_export.py --industry "SPA & Wellness" --industry "Kobido & Masaż" --cooldown-days 30 --dry-run
+
+   # Eksport z jednoczesnym wgraniem kontaktów do Resend Audience:
+   .\.venv\Scripts\python.exe attio_resend_export.py --industry "Kawiarnie" --sync-audience
+
+   # Bezpośrednia wysyłka / podgląd w resend_sender.py prosto z Attio CRM:
+   .\.venv\Scripts\python.exe resend_sender.py --from-attio --industry "SPA & Wellness" --cooldown-days 30 --dry-run
    ```
-   *(z uzupełnianiem pustych pól na istniejących firmach: dodaj `--attio-fill-missing`)*
+
+5. **Testy jednostkowe (169 testów w 7 zestawach):**
+   ```powershell
+   .\.venv\Scripts\python.exe -m pytest -q tests\test_attio_sync.py tests\test_resend_attio_sync.py tests\test_attio_resend_export.py tests\test_supabase_attio_sync.py tests\test_resend_sender.py tests\test_pure_logic.py tests\test_merge_dedup.py
+   ```
