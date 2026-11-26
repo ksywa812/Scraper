@@ -143,6 +143,7 @@ class SupabaseReadClient:
                 "apikey": self.service_role_key,
                 "Authorization": f"Bearer {self.service_role_key}",
                 "Accept": "application/json",
+                "User-Agent": "SoundYou-CRM-Sync/1.0",
             },
         )
         for attempt in range(4):

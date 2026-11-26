@@ -649,7 +649,11 @@ def verify_email_usercheck(
     req = Request(
         f"{USERCHECK_API_BASE}/email/{e}",
         method="GET",
-        headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Accept": "application/json",
+            "User-Agent": "SoundYou-CRM-Sync/1.0",
+        },
     )
     opener = build_opener(_NoRedirect)
     for attempt in range(3):
@@ -1304,6 +1308,8 @@ class AttioClient:
             headers={
                 "Authorization": f"Bearer {self.token}",
                 "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": "SoundYou-CRM-Sync/1.0",
             },
         )
         for attempt in range(4):

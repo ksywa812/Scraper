@@ -102,6 +102,7 @@ class ResendClient:
             headers={
                 "Authorization": f"Bearer {self.api_key}",
                 "Accept": "application/json",
+                "User-Agent": "SoundYou-CRM-Sync/1.0",
             },
         )
         for attempt in range(4):
