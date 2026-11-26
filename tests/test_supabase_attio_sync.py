@@ -324,3 +324,22 @@ class TestSupabaseAttioSync:
         assert created_comp["lead_batch"] == "SoundYou App (Supabase)"
         assert created_comp["domains"] == ["jogaprzystan.pl"]
         assert "Joga / Pilates / Medytacja" in created_comp["soundyou_industry"]
+
+    def test_cli_main_dry_run_writes_report_and_returns_zero(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+        monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "sb_test_key")
+        monkeypatch.setenv("ATTIO_API_KEY", "attio_test_key")
+        monkeypatch.setattr(smod, "REPORTS_DIR", tmp_path)
+        monkeypatch.setattr(
+            smod,
+            "SupabaseReadClient",
+            lambda url, key: FakeSupabaseReadClient(
+                profiles=[{"id": "1", "email": "spa@example.pl", "business_name": "Spa Test", "business": "Spa", "plan": "Trial"}]
+            ),
+        )
+        monkeypatch.setattr(smod, "AttioClient", lambda token: FakeAttioForSupabase())
+
+        rc = smod.main(["--dry-run"])
+        assert rc == 0
+        reports = list(tmp_path.glob("supabase_attio_sync_*.json"))
+        assert len(reports) == 1

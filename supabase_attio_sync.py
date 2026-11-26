@@ -782,7 +782,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    attio_token = resolve_attio_token(interactive=sys.stdin.isatty())
+    attio_token = resolve_attio_token(allow_prompt=sys.stdin.isatty())
     if not attio_token:
         logger.error("Brak klucza ATTIO_API_KEY w środowisku / .env.")
         return 2
@@ -822,6 +822,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.no_report:
         report_payload = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "mode": "dry_run" if args.dry_run else "live",
             "create_missing": not args.no_create_missing,
             "include_demo_plays": args.include_demo_plays,
@@ -829,8 +830,10 @@ def main(argv: list[str] | None = None) -> int:
             "stats": stats,
             "audit": result["audit"],
         }
-        report_path = write_sync_report(report_payload, prefix="supabase_attio_sync")
-        print(f"  Raport JSON zapisany w                 : {report_path}")
+        target_report = REPORTS_DIR / f"supabase_attio_sync_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json"
+        report_path = write_sync_report(report_payload, target_report)
+        if report_path:
+            print(f"  Raport JSON zapisany w                 : {report_path}")
 
     return 0
 
